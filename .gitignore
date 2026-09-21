@@ -1,0 +1,11 @@
+.DS_Store
+*.log
+
+# No local harness should be exposed to remote.
+.claude/
+.gemini/
+.codex/
+
+# Please build outputs and the wrapper script (never committed).
+plz-out/
+pleasew

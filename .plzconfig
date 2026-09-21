@@ -1,0 +1,37 @@
+; mcp-kit — Please build configuration.
+;
+; Everything is built and tested through plz so results are reproducible and
+; cached: `plz build //...`, `plz test //...`.
+
+[Please]
+Version = 17.32.0
+SelfUpdate = true
+
+[Build]
+Path = /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+
+[Parse]
+PreloadSubincludes = ///go//build_defs:go
+
+[Plugin "go"]
+Target = //plugins:go
+ImportPath = github.com/nv3to/mcp-kit
+GoTool = //third_party/go:toolchain|go
+Stdlib = //third_party/go:std
+ModFile = //:gomod
+
+; Licence gate: every third-party rule declares its licence and it must be
+; listed here. Please matches these strings exactly (SPDX identifiers).
+; Copyleft licences are NOT accepted.
+[Licences]
+Accept = MIT
+Accept = Apache-2.0
+Accept = BSD-2-Clause
+Accept = BSD-3-Clause
+Accept = ISC
+Reject = GPL-2.0-only
+Reject = GPL-2.0-or-later
+Reject = GPL-3.0-only
+Reject = GPL-3.0-or-later
+Reject = AGPL-3.0-only
+Reject = AGPL-3.0-or-later
