@@ -12,3 +12,11 @@ plugin_repo(
     plugin = "go-rules",
     revision = "v1.33.0",
 )
+
+# lint-rules lives in-tree until it moves to its own repository; then this
+# becomes a plugin_repo like the one above and nothing else changes.
+subrepo(
+    name = "lint",
+    path = "plugins/lint-rules",
+    plugin = True,
+)

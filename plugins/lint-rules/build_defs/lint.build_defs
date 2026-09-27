@@ -1,0 +1,90 @@
+"""lint-rules: linters as ordinary plz tests.
+
+lint() goes in every BUILD file that owns sources; repo_lint() goes once in
+the root BUILD file. Tools come from the plugin config ([Plugin "lint"]), so
+each repo supplies its own pinned gofmt, go and pyflakes.
+"""
+
+
+def lint(srcs:list=None, visibility:list=None):
+    """Lints this package's own sources.
+
+    Creates, each only when there are matching sources and its tool is
+    configured:
+      lint_gofmt     fails when `gofmt -l` names a file, and prints the diff;
+      lint_pyflakes  fails on any pyflakes finding.
+    It also creates `lint`, a filegroup of the linted sources, which
+    repo_lint() depends on: that is how it knows what is covered and when to
+    re-run.
+
+    Args:
+      srcs (list): Files to lint. Defaults to every *.go and *.py file in the
+                   package directory; a package that owns sub-directories
+                   passes e.g. glob(["**/*.py"]).
+      visibility (list): Visibility of the `lint` filegroup.
+    """
+    files = srcs if srcs is not None else glob(["*.go", "*.py"], allow_empty = True)
+    go_srcs = [f for f in files if f.endswith(".go")]
+    py_srcs = [f for f in files if f.endswith(".py")]
+    label = CONFIG.LINT.LABEL
+    if go_srcs and CONFIG.LINT.GOFMT_TOOL:
+        gentest(
+            name = "lint_gofmt",
+            data = go_srcs,
+            labels = [label, "gofmt"],
+            no_test_output = True,
+            test_cmd = 'out=`$TOOLS -l $DATA` || exit 1; if [ -n "$out" ]; then echo "gofmt: run gofmt -w on:"; echo "$out"; $TOOLS -d $DATA; exit 1; fi',
+            test_tools = [CONFIG.LINT.GOFMT_TOOL],
+        )
+    if py_srcs and CONFIG.LINT.PYFLAKES_TOOL:
+        gentest(
+            name = "lint_pyflakes",
+            data = py_srcs,
+            labels = [label, "pyflakes"],
+            no_test_output = True,
+            test_cmd = "$TOOLS $DATA",
+            test_tools = [CONFIG.LINT.PYFLAKES_TOOL],
+        )
+    return filegroup(
+        name = "lint",
+        srcs = files,
+        visibility = visibility or ["//:all"],
+    )
+
+
+def repo_lint(name:str="repo_lint", packages:list=[]):
+    """The repo-wide half: `go vet` and the coverage guard.
+
+    vet needs the whole module and the Go caches, so this test runs locally,
+    outside the sandbox, against the repo root. It depends on every listed
+    package's `lint` filegroup, so it re-runs whenever a linted source
+    changes.
+
+    The coverage guard fails when a tracked *.go or *.py file (outside
+    testdata/ and the configured excludes) is in none of those filegroups:
+    its package does not call lint(), or is missing from `packages`. A new
+    package therefore cannot skip lint silently.
+
+    Args:
+      name (str): Name of the test.
+      packages (list): Every package that calls lint(), as "//path" ("//" for
+                       the root package).
+    """
+    tools = {"guard": "///lint//tools:repo_lint"}
+    args = ""
+    if CONFIG.LINT.GO_TOOL:
+        tools["go"] = CONFIG.LINT.GO_TOOL
+        args = " --go $TOOLS_GO"
+    for prefix in CONFIG.LINT.EXCLUDE or []:
+        args += " --exclude " + prefix
+    return gentest(
+        name = name,
+        data = [p + ":lint" for p in packages],
+        labels = [CONFIG.LINT.LABEL, "vet"],
+        local = True,
+        no_test_output = True,
+        pass_env = ["HOME", "PATH", "GOPATH", "GOMODCACHE", "GOCACHE", "GOPROXY", "GOFLAGS"],
+        sandbox = False,
+        test_cmd = "$TOOLS_GUARD" + args,
+        test_tools = tools,
+    )

@@ -12,6 +12,7 @@ Path = /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 
 [Parse]
 PreloadSubincludes = ///go//build_defs:go
+PreloadSubincludes = ///lint//build_defs:lint
 
 [Plugin "go"]
 Target = //plugins:go
@@ -19,6 +20,14 @@ ImportPath = github.com/nv3to/mcp-kit
 GoTool = //third_party/go:toolchain|go
 Stdlib = //third_party/go:std
 ModFile = //:gomod
+
+; Lint (plugins/lint-rules): every package calls lint() (gofmt) and the
+; root BUILD's repo_lint() runs go vet plus the coverage guard. All of it
+; is labelled `lint` and runs in `plz test //...`.
+[Plugin "lint"]
+Target = //plugins:lint
+GofmtTool = //third_party/go:toolchain|gofmt
+GoTool = //third_party/go:toolchain|go
 
 ; Licence gate: every third-party rule declares its licence and it must be
 ; listed here. Please matches these strings exactly (SPDX identifiers).

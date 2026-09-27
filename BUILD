@@ -41,3 +41,15 @@ go_test(
         "///third_party/go/github.com_modelcontextprotocol_go-sdk//mcp",
     ],
 )
+
+lint()
+
+# Repo-wide lint: go vet, and the guard that every source is in some
+# package's lint() and that package is listed here (plugins/lint-rules).
+repo_lint(
+    name = "vet",
+    packages = [
+        "//",
+        "//mcptest",
+    ],
+)

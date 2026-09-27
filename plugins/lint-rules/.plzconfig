@@ -1,0 +1,35 @@
+; lint-rules: a Please plugin that runs linters as ordinary plz tests.
+; Consumers load it with [Plugin "lint"] and set the tool keys below; a
+; language whose tool is unset is skipped.
+
+[Please]
+Version = >=17.32.0
+
+[PluginDefinition]
+Name = lint
+
+[PluginConfig "gofmt_tool"]
+Help = Build label or path of gofmt, e.g. //third_party/go:toolchain|gofmt. Unset skips the gofmt check.
+Optional = true
+Inherit = true
+
+[PluginConfig "go_tool"]
+Help = Build label or path of go, used by repo_lint() for `go vet ./...`. Unset skips vet.
+Optional = true
+Inherit = true
+
+[PluginConfig "pyflakes_tool"]
+Help = Build label or path of a pyflakes executable. Unset skips the pyflakes check.
+Optional = true
+Inherit = true
+
+[PluginConfig "label"]
+Help = Label put on every lint test, so `plz test --include <label>` runs lint alone.
+DefaultValue = lint
+Inherit = true
+
+[PluginConfig "exclude"]
+Help = Repo-relative path prefixes the coverage guard ignores (vendored or generated sources). testdata/ is always ignored.
+Repeatable = true
+Optional = true
+Inherit = true

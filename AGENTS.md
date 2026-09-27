@@ -24,14 +24,17 @@ building stdio MCP servers on the official SDK
 
 ```sh
 plz build //...                 # build everything
-plz test //...                  # all tests
+plz test //...                  # all tests, including lint
+plz test //... --include lint   # lint alone: gofmt and go vet
 plz test //:mcpkit_test         # the one test target
 go test -run TestGate ./...     # one test, without plz
-gofmt -l .  &&  go vet ./...    # must print nothing
 ```
 
-Before you report a change as done, run `plz test //...` and make sure `gofmt`
-and `go vet` are clean.
+Before you report a change as done, run `plz test //...`. It includes gofmt
+(`:lint_gofmt` in each package) and `go vet` (`//:vet`), from the in-tree
+plugin `plugins/lint-rules`. A new package ends its BUILD file with `lint()`
+and is listed in `repo_lint(packages = [...])` in the root BUILD, or `//:vet`
+fails.
 
 To change a dependency version, edit `go.mod` **and** `third_party/go/BUILD`
 to the same version (they must match exactly), then run

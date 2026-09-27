@@ -14,3 +14,5 @@ filegroup(
     srcs = glob(["*.go"]),
     visibility = ["PUBLIC"],
 )
+
+lint()
