@@ -45,7 +45,7 @@ go_test(
 lint()
 
 # Repo-wide lint: go vet, and the guard that every source is in some
-# package's lint() and that package is listed here (plugins/lint-rules).
+# package's lint() and that package is listed here (github.com/nv3to/lint-rules).
 repo_lint(
     name = "vet",
     packages = [

@@ -21,7 +21,7 @@ GoTool = //third_party/go:toolchain|go
 Stdlib = //third_party/go:std
 ModFile = //:gomod
 
-; Lint (plugins/lint-rules): every package calls lint() (gofmt) and the
+; Lint (github.com/nv3to/lint-rules, pinned in plugins/BUILD): every package calls lint() (gofmt) and the
 ; root BUILD's repo_lint() runs go vet plus the coverage guard. All of it
 ; is labelled `lint` and runs in `plz test //...`.
 [Plugin "lint"]

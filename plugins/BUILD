@@ -13,10 +13,11 @@ plugin_repo(
     revision = "v1.33.0",
 )
 
-# lint-rules lives in-tree until it moves to its own repository; then this
-# becomes a plugin_repo like the one above and nothing else changes.
-subrepo(
+# github.com/nv3to/lint-rules, MIT.
+plugin_repo(
     name = "lint",
-    path = "plugins/lint-rules",
-    plugin = True,
+    hashes = ["a095a5791be2f65d4398b7a32cb7458a30460070ee15772adfa4a2a79bb4747b"],
+    owner = "nv3to",
+    plugin = "lint-rules",
+    revision = "v0.1.0",
 )

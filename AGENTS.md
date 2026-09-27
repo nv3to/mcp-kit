@@ -31,8 +31,8 @@ go test -run TestGate ./...     # one test, without plz
 ```
 
 Before you report a change as done, run `plz test //...`. It includes gofmt
-(`:lint_gofmt` in each package) and `go vet` (`//:vet`), from the in-tree
-plugin `plugins/lint-rules`. A new package ends its BUILD file with `lint()`
+(`:lint_gofmt` in each package) and `go vet` (`//:vet`), from the plugin
+`github.com/nv3to/lint-rules`, pinned in `plugins/BUILD`. A new package ends its BUILD file with `lint()`
 and is listed in `repo_lint(packages = [...])` in the root BUILD, or `//:vet`
 fails.
 
