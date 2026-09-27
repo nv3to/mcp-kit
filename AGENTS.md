@@ -25,14 +25,16 @@ building stdio MCP servers on the official SDK
 ```sh
 plz build //...                 # build everything
 plz test //...                  # all tests, including lint
-plz test //... --include lint   # lint alone: gofmt and go vet
+plz test //... --include lint   # lint alone: gofmt, go vet and shellcheck
 plz test //:mcpkit_test         # the one test target
 go test -run TestGate ./...     # one test, without plz
 ```
 
 Before you report a change as done, run `plz test //...`. It includes gofmt
 (`:lint_gofmt` in each package) and `go vet` (`//:vet`), from the plugin
-`github.com/nv3to/lint-rules`, pinned in `plugins/BUILD`. A new package ends its BUILD file with `lint()`
+`github.com/nv3to/lint-rules`, pinned in `plugins/BUILD`.
+Shell scripts (`.sh`) are checked by shellcheck from the host PATH (`:lint_shellcheck`);
+there are none yet. A new package ends its BUILD file with `lint()`
 and is listed in `repo_lint(packages = [...])` in the root BUILD, or `//:vet`
 fails.
 

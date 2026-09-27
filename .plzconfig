@@ -28,6 +28,9 @@ ModFile = //:gomod
 Target = //plugins:lint
 GofmtTool = //third_party/go:toolchain|gofmt
 GoTool = //third_party/go:toolchain|go
+; shellcheck comes from the host PATH ([Build] Path): it is GPL-3.0, so it is
+; not a fetched rule. A host without it fails once a .sh file exists.
+Rule = shellcheck .sh shellcheck
 
 ; Licence gate: every third-party rule declares its licence and it must be
 ; listed here. Please matches these strings exactly (SPDX identifiers).
