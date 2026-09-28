@@ -1,7 +1,8 @@
 // Package confine starts a command that can touch only what a Profile names:
 // the files it lists, the environment it allows and a temporary directory of
-// the command's own. The network is closed. A command that cannot be held to
-// its profile is refused, never started unconfined.
+// the command's own. The network is closed, or narrowed to one proxy. A
+// command that cannot be held to its profile is refused, never started
+// unconfined.
 //
 // The package confines the commands a server starts. It does not confine the
 // server itself.
@@ -11,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +35,13 @@ const TempVar = "TMPDIR"
 // killGrace bounds how long Wait lingers for output once the command is gone,
 // so a process the command left behind cannot hold Wait through a pipe.
 const killGrace = 5 * time.Second
+
+// proxyVars are the variables that point a program at a proxy, in both
+// spellings. noProxyVars exempt hosts from it and are set empty.
+var (
+	proxyVars   = []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"}
+	noProxyVars = []string{"NO_PROXY", "no_proxy"}
+)
 
 // Profile states what a confined command may touch. Anything it does not
 // name is out of reach. The zero Profile allows the command's own temporary
@@ -60,11 +69,28 @@ type Env struct {
 	Set map[string]string
 }
 
-// Network says what a confined command may reach.
-type Network struct{}
+// Network says what a confined command may reach. It is None or comes from
+// Proxy.
+type Network struct {
+	// narrowed tells a proxy with an empty address from None.
+	narrowed bool
+	proxy    string
+}
 
 // None closes the network: the command can open no connection at all.
 var None = Network{}
+
+// Proxy narrows the network to one destination: addr, the address an egress
+// proxy listens on, as a loopback address and a port such as
+// "127.0.0.1:3128". The command can connect there and nowhere else, cannot
+// listen and cannot resolve a name, so what the proxy allows is all the
+// command reaches. The command finds the proxy in HTTP_PROXY, HTTPS_PROXY and
+// their lower-case spellings, beside an empty NO_PROXY; Env may not name
+// these. An address that is not a loopback address with a port makes Command
+// fail with kind invalid.
+func Proxy(addr string) Network {
+	return Network{narrowed: true, proxy: addr}
+}
 
 // Cmd is a confined command that has not run yet. It is used like an
 // exec.Cmd and runs once.
@@ -93,6 +119,9 @@ type resolved struct {
 	readOnly  []string
 	readWrite []string
 	tmp       string
+	// proxy is the one address the command may connect to; the zero value
+	// closes the network.
+	proxy netip.AddrPort
 }
 
 // readable reports whether path lies inside a path the profile can read.
@@ -158,7 +187,43 @@ func (p Profile) resolve() (resolved, error) {
 	if err != nil {
 		return resolved{}, err
 	}
-	return resolved{readOnly: readOnly, readWrite: readWrite}, nil
+	proxy, err := p.Network.resolve()
+	if err != nil {
+		return resolved{}, err
+	}
+	return resolved{readOnly: readOnly, readWrite: readWrite, proxy: proxy}, nil
+}
+
+// resolve parses the address of the proxy. A name is not accepted, because
+// the command and the sandbox must mean the same address by it.
+func (n Network) resolve() (netip.AddrPort, error) {
+	if !n.narrowed {
+		return netip.AddrPort{}, nil
+	}
+	addr, err := netip.ParseAddrPort(n.proxy)
+	if err != nil {
+		return netip.AddrPort{}, mcpkit.Errorf(mcpkit.Invalid, "confine: the proxy %q is not an address and a port", n.proxy)
+	}
+	if !addr.Addr().IsLoopback() || addr.Port() == 0 {
+		return netip.AddrPort{}, mcpkit.Errorf(mcpkit.Invalid, "confine: the proxy %s is not a port of a loopback address", n.proxy)
+	}
+	return addr, nil
+}
+
+// proxyEnv is what points the command at its proxy: nothing when the
+// network is closed.
+func (r resolved) proxyEnv() []string {
+	if !r.proxy.IsValid() {
+		return nil
+	}
+	var env []string
+	for _, name := range proxyVars {
+		env = append(env, name+"=http://"+r.proxy.String())
+	}
+	for _, name := range noProxyVars {
+		env = append(env, name+"=")
+	}
+	return env
 }
 
 func checkName(name string) error {
@@ -167,6 +232,13 @@ func checkName(name string) error {
 		return mcpkit.Errorf(mcpkit.Invalid, "confine: %q is not the name of a variable", name)
 	case name == Marker || name == TempVar:
 		return mcpkit.Errorf(mcpkit.Invalid, "confine: the variable %s is set by confine", name)
+	}
+	for _, list := range [][]string{proxyVars, noProxyVars} {
+		for _, set := range list {
+			if name == set {
+				return mcpkit.Errorf(mcpkit.Invalid, "confine: the variable %s is set by confine from Profile.Network", name)
+			}
+		}
 	}
 	return nil
 }
@@ -218,7 +290,8 @@ func Confined() bool {
 // started, when the sandbox of this system is missing, when it cannot
 // express the profile, when this process is itself confined, or when the
 // profile makes a directory given to Verify or Verified writable. A path
-// that does not exist is not_found.
+// that does not exist is not_found. A proxy that is not a port of a loopback
+// address is invalid, and so is a variable in Env that confine sets itself.
 func Command(ctx context.Context, profile Profile, name string, args ...string) (*Cmd, error) {
 	b, err := pick()
 	if err != nil {
@@ -305,7 +378,8 @@ func (c *Cmd) start(tmp string) error {
 	}
 	argv = append(append(argv, c.path), c.args...)
 	cmd := exec.CommandContext(c.ctx, argv[0], argv[1:]...)
-	cmd.Env = append(append([]string{}, c.env...), TempVar+"="+paths.tmp, Marker+"=1")
+	cmd.Env = append(append([]string{}, c.env...), paths.proxyEnv()...)
+	cmd.Env = append(cmd.Env, TempVar+"="+paths.tmp, Marker+"=1")
 	cmd.Dir = dir
 	cmd.Stdout = c.Stdout
 	cmd.Stderr = c.Stderr

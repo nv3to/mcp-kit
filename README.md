@@ -199,8 +199,9 @@ text = budget.Clean(text, budget.StripColour, budget.ReplacePath(checkout, "."),
 A confined command often has to download its dependencies. Package `egress`
 is a forward proxy for that: it reads from the hosts you name and refuses
 everything else. It uses the standard library only and knows nothing of
-`confine`, which keeps the network closed; pointing the command at the proxy and closing every other route
-is up to you.
+`confine`. On its own it is a proxy that nothing is forced to use;
+[`confine.Proxy`](#a-command-that-reaches-the-proxy-and-nothing-else) makes it
+the one destination a command can reach.
 
 ```go
 p, err := egress.New(egress.Config{
@@ -217,7 +218,6 @@ if err != nil {
 	return err
 }
 defer p.Close()
-cmd.Env = append(cmd.Env, "HTTP_PROXY=http://"+addr, "HTTPS_PROXY=http://"+addr)
 ```
 
 | Request | Served when | Otherwise refused as |
@@ -252,7 +252,8 @@ closed set.
 
 Package `confine` starts a command that can touch only what a profile names.
 You state once what the command may read, write and see of the environment;
-everything else is out of reach, and the network is closed.
+everything else is out of reach, and the network is closed unless you narrow
+it to a proxy.
 
 ```go
 profile := confine.Profile{
@@ -296,7 +297,8 @@ are held to a profile.
   every profile. Nothing can be written outside the profile.
 - **The environment is exact.** The command gets the names in `Env.Pass`
   that the server has set, the pairs in `Env.Set`, `TMPDIR` and
-  `MCPKIT_CONFINED=1`, and nothing else.
+  `MCPKIT_CONFINED=1`, the proxy variables when the network is a proxy, and
+  nothing else.
 - **A temporary directory of its own.** Each command gets a fresh directory,
   named by `TMPDIR`, that no other confined command can see. `Wait` removes
   it, also when the command was killed through the context.
@@ -310,6 +312,47 @@ are held to a profile.
   changed. Keep that directory out of every profile's writable paths:
   `Command` refuses a profile that makes it writable once the directory was
   given to `Verify` or `Verified`.
+
+### A command that reaches the proxy and nothing else
+
+`Profile.Network` is `confine.None` unless you set it. `confine.Proxy(addr)`
+takes the address an `egress` proxy listens on and makes it the only
+destination of the command, so the allowlist of the proxy is the network
+policy. Neither package imports the other: the address is all they share.
+
+```go
+p, err := egress.New(egress.Config{Allow: []string{"proxy.golang.org"}})
+if err != nil {
+	return err
+}
+addr, err := p.Start(ctx)
+if err != nil {
+	return err
+}
+defer p.Close()
+
+profile := confine.Profile{
+	ReadWrite: []string{checkout},
+	Env:       confine.Env{Pass: []string{"PATH"}},
+	Network:   confine.Proxy(addr),
+}
+cmd, err := confine.Command(ctx, profile, "go", "mod", "download")
+```
+
+- **One destination.** The command can connect to `addr`. Every other
+  connection is refused, to a public address and to another loopback port
+  alike, and the command cannot listen. With `None` the proxy is out of reach
+  as well.
+- **Names do not resolve inside.** The command hands the name to the proxy,
+  which resolves it outside the sandbox and checks the address.
+- **The proxy variables are set for you.** The command finds
+  `http://<addr>` in `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and
+  `https_proxy`, and an empty `NO_PROXY` and `no_proxy`, so that no host is
+  exempt. `Env` may not name these six under any network: `Command` returns
+  `invalid`. A command that ignores them reaches nothing.
+- **The address is a port of a loopback address**, written as
+  `127.0.0.1:3128`, which is what `(*Proxy).Start` returns. Anything else,
+  a name included, is `invalid`.
 
 ## API
 
@@ -349,6 +392,7 @@ are held to a profile.
 | `confine` | `Profile{ReadOnly, ReadWrite, Env, Network}` | what a command may touch |
 | | `Env{Pass, Set}` | the names copied from the server's environment, and fixed pairs |
 | | `Network`, `None` | what the command may reach; `None` closes the network |
+| | `Proxy(addr string) Network` | the network narrowed to the proxy that listens on `addr` |
 | | `Command(ctx, profile, name, args...) (*Cmd, error)` | the command held to the profile; `refused` when that cannot be guaranteed |
 | | `Cmd{Stdout, Stderr, Dir}`, `(*Cmd).Run`, `Start`, `Wait` | used like an `exec.Cmd`; `Wait` removes the temporary directory |
 | | `Confined() bool` | whether this process is under a sandbox already |

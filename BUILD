@@ -56,6 +56,7 @@ repo_lint(
         "//",
         "//budget",
         "//confine",
+        "//confine/nettest",
         "//egress",
         "//mcptest",
     ],

@@ -96,10 +96,19 @@ func seatbeltQuote(path string) (string, error) {
 // seatbeltProfile renders the profile. A later rule overrides an earlier
 // one, so the denials come first and the allowed paths follow. The
 // directories above an allowed path show their metadata and nothing else,
-// which a program needs to find its working directory.
+// which a program needs to find its working directory. Seatbelt names a
+// loopback address as localhost and in no other way, so the proxy is a port
+// there (docs/confinement-macos.md, probe 1).
 func seatbeltProfile(r resolved) (string, error) {
 	var b strings.Builder
-	b.WriteString("(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n")
+	b.WriteString("(version 1)\n(allow default)\n(deny network*)\n")
+	if r.proxy.IsValid() {
+		if !r.proxy.Addr().IsLoopback() {
+			return "", fmt.Errorf("the proxy %s is not on a loopback address, which a Seatbelt profile cannot express", r.proxy)
+		}
+		fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%d\"))\n", r.proxy.Port())
+	}
+	b.WriteString("(deny file-write*)\n")
 	b.WriteString("(allow file-write* (literal \"/dev/null\"))\n")
 
 	read := append(append([]string{}, r.readOnly...), r.readWrite...)

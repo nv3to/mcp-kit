@@ -52,6 +52,9 @@ func TestImportsOnlyTheSDK(t *testing.T) {
 		// egress and confine have no use for the protocol: the standard
 		// library and this module are all they may import.
 		sdkAllowed := filepath.Base(dir) != "egress" && filepath.Base(dir) != "confine"
+		// Neither of the two knows the other, so each can be used alone; a
+		// package of tests pairs them.
+		apart := map[string]string{"egress": module + "/confine", "confine": module + "/egress"}[filepath.Base(dir)]
 		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
@@ -69,6 +72,9 @@ func TestImportsOnlyTheSDK(t *testing.T) {
 				}
 				std := !strings.Contains(strings.SplitN(path, "/", 2)[0], ".")
 				self := path == module || strings.HasPrefix(path, module+"/")
+				if apart != "" && (path == apart || strings.HasPrefix(path, apart+"/")) {
+					t.Errorf("%s imports %s: confine and egress may not import each other", file, path)
+				}
 				if !std && !self && !(sdkAllowed && path == sdk) {
 					t.Errorf("%s imports %s: mcpkit may import only the standard library, %s (not from egress or confine) and itself", file, path, sdk)
 				}

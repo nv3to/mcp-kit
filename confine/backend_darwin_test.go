@@ -5,6 +5,7 @@ package confine
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,26 @@ func TestSeatbeltRender(t *testing.T) {
 	}
 	if strings.Contains(first, "(allow file-write* (subpath \"/opt/read \\\"only\\\"\"))") {
 		t.Errorf("the profile lets the read-only path be written:\n%s", first)
+	}
+}
+
+func TestSeatbeltRenderProxy(t *testing.T) {
+	const rule = "(allow network-outbound (remote ip \"localhost:3128\"))\n"
+	closed := mustRender(t, resolved{})
+	if strings.Contains(closed, "network-outbound") {
+		t.Errorf("the profile of a closed network allows traffic:\n%s", closed)
+	}
+	narrowed := mustRender(t, resolved{proxy: netip.MustParseAddrPort("127.0.0.1:3128")})
+	denied := strings.Index(narrowed, "(deny network*)\n")
+	allowed := strings.Index(narrowed, rule)
+	if denied < 0 || allowed < denied {
+		t.Errorf("the denial of the network must come before the proxy, which overrides it: %d, %d:\n%s", denied, allowed, narrowed)
+	}
+	if got := strings.Count(narrowed, "(allow network"); got != 1 {
+		t.Errorf("the profile allows %d network operations, want the proxy alone:\n%s", got, narrowed)
+	}
+	if _, err := seatbeltProfile(resolved{proxy: netip.MustParseAddrPort("192.0.2.1:3128")}); err == nil {
+		t.Errorf("a proxy that is not on a loopback address: want it refused")
 	}
 }
 

@@ -196,15 +196,45 @@ func accountHome(t *testing.T) string {
 	return resolve(t, home)
 }
 
+// proxyAddr stands for the address of a proxy where none is dialled: confine
+// takes an address and knows nothing of what listens there.
+const proxyAddr = "127.0.0.1:3128"
+
+// eachNetwork runs a case under a closed network and under a proxy, because
+// what a profile says of the network must not change what it says of files
+// and of the environment.
+func eachNetwork(t *testing.T, run func(t *testing.T, f fixture)) {
+	t.Helper()
+	for _, network := range []struct {
+		name string
+		is   confine.Network
+	}{
+		{"closed", confine.None},
+		{"proxy", confine.Proxy(proxyAddr)},
+	} {
+		t.Run(network.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.profile.Network = network.is
+			run(t, f)
+		})
+	}
+}
+
 func TestEscapeReadOutsideTheProfile(t *testing.T) {
-	f := newFixture(t)
+	eachNetwork(t, escapeReadOutsideTheProfile)
+}
+
+func escapeReadOutsideTheProfile(t *testing.T, f fixture) {
 	if r := try(t, f.profile, "/bin/cat", f.canary); r.err == nil {
 		t.Errorf("read of %s: want it to fail, got %q", f.canary, r.output)
 	}
 }
 
 func TestEscapeReadUnderTheHomeDirectory(t *testing.T) {
-	f := newFixture(t)
+	eachNetwork(t, escapeReadUnderTheHomeDirectory)
+}
+
+func escapeReadUnderTheHomeDirectory(t *testing.T, f fixture) {
 	dir, err := os.MkdirTemp(accountHome(t), ".mcpkit-confine-escape-")
 	if err != nil {
 		t.Fatalf("create the fixture under the home directory: %v", err)
@@ -222,7 +252,10 @@ func TestEscapeReadUnderTheHomeDirectory(t *testing.T) {
 }
 
 func TestEscapeWriteOutsideTheWritablePaths(t *testing.T) {
-	f := newFixture(t)
+	eachNetwork(t, escapeWriteOutsideTheWritablePaths)
+}
+
+func escapeWriteOutsideTheWritablePaths(t *testing.T, f fixture) {
 	target := filepath.Join(f.outside, "written.txt")
 	r := try(t, f.profile, "/bin/sh", "-c", writeScript, target)
 	if r.err == nil || exists(target) {
@@ -231,7 +264,10 @@ func TestEscapeWriteOutsideTheWritablePaths(t *testing.T) {
 }
 
 func TestEscapeWriteToAReadOnlyPath(t *testing.T) {
-	f := newFixture(t)
+	eachNetwork(t, escapeWriteToAReadOnlyPath)
+}
+
+func escapeWriteToAReadOnlyPath(t *testing.T, f fixture) {
 	target := filepath.Join(f.readOnly, "written.txt")
 	r := try(t, f.profile, "/bin/sh", "-c", writeScript, target)
 	if r.err == nil || exists(target) {
@@ -244,7 +280,10 @@ func TestEscapeWriteToAReadOnlyPath(t *testing.T) {
 }
 
 func TestEscapeWriteThroughASymlink(t *testing.T) {
-	f := newFixture(t)
+	eachNetwork(t, escapeWriteThroughASymlink)
+}
+
+func escapeWriteThroughASymlink(t *testing.T, f fixture) {
 	target := filepath.Join(f.outside, "target.txt")
 	write(t, target, "untouched")
 	toFile := filepath.Join(f.readWrite, "to-file")
@@ -270,9 +309,18 @@ func TestEscapeWriteThroughASymlink(t *testing.T) {
 	}
 }
 
+// proxyNames are the variables a proxy adds to the environment.
+var proxyNames = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"}
+
 func TestEscapeEnvironment(t *testing.T) {
-	f := newFixture(t)
+	eachNetwork(t, escapeEnvironment)
+}
+
+func escapeEnvironment(t *testing.T, f fixture) {
 	t.Setenv("CONFINE_TEST_SECRET", canaryText)
+	// The server's own proxy is not the command's.
+	t.Setenv("HTTPS_PROXY", "http://192.0.2.1:8080")
+	t.Setenv("no_proxy", "*")
 	t.Setenv("CONFINE_TEST_PASSED", "passed")
 	t.Setenv("CONFINE_TEST_REPLACED", "from the server")
 	os.Unsetenv("CONFINE_TEST_UNSET")
@@ -295,6 +343,18 @@ func TestEscapeEnvironment(t *testing.T) {
 	}
 	sort.Strings(names)
 	want := []string{"CONFINE_TEST_FIXED", "CONFINE_TEST_PASSED", "CONFINE_TEST_REPLACED", confine.Marker, confine.TempVar}
+	if f.profile.Network != confine.None {
+		want = append(want, proxyNames...)
+		for _, name := range proxyNames {
+			value := "http://" + proxyAddr
+			if strings.EqualFold(name, "no_proxy") {
+				value = ""
+			}
+			if got[name] != value {
+				t.Errorf("%s is %q, want %q", name, got[name], value)
+			}
+		}
+	}
 	sort.Strings(want)
 	if strings.Join(names, " ") != strings.Join(want, " ") {
 		t.Errorf("the environment has the names %q, want exactly %q", names, want)
@@ -307,8 +367,46 @@ func TestEscapeEnvironment(t *testing.T) {
 	}
 }
 
-func TestEscapeTemporaryDirectoryOfAnotherCommand(t *testing.T) {
+func TestProxyVariablesAreNotTheProfiles(t *testing.T) {
+	eachNetwork(t, func(t *testing.T, f fixture) {
+		for _, name := range proxyNames {
+			t.Setenv(name, "http://192.0.2.1:8080")
+			for _, env := range []confine.Env{
+				{Pass: []string{name}},
+				{Set: map[string]string{name: "http://192.0.2.1:8080"}},
+			} {
+				f.profile.Env = env
+				cmd, err := confine.Command(context.Background(), f.profile, "/usr/bin/env")
+				if kindOf(err) != mcpkit.Invalid || cmd != nil {
+					t.Errorf("environment %+v: got %v, want an error of kind invalid and no command", env, err)
+				}
+			}
+		}
+	})
+}
+
+func TestProxyThatIsNoLoopbackPort(t *testing.T) {
 	f := newFixture(t)
+	for _, addr := range []string{"", "127.0.0.1", "localhost:3128", "127.0.0.1:0", "192.0.2.1:3128", "0.0.0.0:3128", "[::]:3128", "http://127.0.0.1:3128"} {
+		f.profile.Network = confine.Proxy(addr)
+		cmd, err := confine.Command(context.Background(), f.profile, "/usr/bin/true")
+		if kindOf(err) != mcpkit.Invalid || cmd != nil {
+			t.Errorf("proxy %q: got %v, want an error of kind invalid and no command", addr, err)
+		}
+	}
+	for _, addr := range []string{"127.0.0.1:3128", "[::1]:3128"} {
+		f.profile.Network = confine.Proxy(addr)
+		if _, err := confine.Command(context.Background(), f.profile, "/usr/bin/true"); err != nil {
+			t.Errorf("proxy %q: got %v, want a command", addr, err)
+		}
+	}
+}
+
+func TestEscapeTemporaryDirectoryOfAnotherCommand(t *testing.T) {
+	eachNetwork(t, escapeTemporaryDirectoryOfAnotherCommand)
+}
+
+func escapeTemporaryDirectoryOfAnotherCommand(t *testing.T, f fixture) {
 	tmp, stop := hold(t, f.profile)
 	canary := filepath.Join(tmp, "canary.txt")
 	write(t, canary, canaryText)
@@ -328,7 +426,10 @@ func TestEscapeTemporaryDirectoryOfAnotherCommand(t *testing.T) {
 }
 
 func TestAllowedReadAndWrite(t *testing.T) {
-	f := newFixture(t)
+	eachNetwork(t, allowedReadAndWrite)
+}
+
+func allowedReadAndWrite(t *testing.T, f fixture) {
 	if r := try(t, f.profile, "/bin/cat", f.allowed); r.err != nil || r.output != "allowed" {
 		t.Errorf("read of %s: got %v and %q, want it to succeed", f.allowed, r.err, r.output)
 	}
@@ -344,7 +445,10 @@ func TestAllowedReadAndWrite(t *testing.T) {
 }
 
 func TestWorkingDirectory(t *testing.T) {
-	f := newFixture(t)
+	eachNetwork(t, workingDirectory)
+}
+
+func workingDirectory(t *testing.T, f fixture) {
 	ctx := context.Background()
 
 	cmd, err := confine.Command(ctx, f.profile, "/bin/cat", "allowed.txt")

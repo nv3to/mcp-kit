@@ -21,6 +21,7 @@ building stdio MCP servers on the official SDK
 | `mcpkit_test.go` | the toy server that every behaviour test drives |
 | `imports_test.go` | the dependency guard |
 | `confine/` | `Profile`, `Command`, `Confined`, `Verify`, `Verified`: a command held to a profile, through `sandbox-exec` on macOS; the escape suite and the probes behind `docs/confinement-macos.md` and `docs/confinement-linux.md` (label `sandbox`) |
+| `confine/nettest/` | the network cases of the escape suite: a confined command against a real `egress` proxy (label `sandbox`) |
 | `plugins/`, `third_party/go/` | Please plugin and pinned Go modules and toolchain |
 
 ## Commands
@@ -54,7 +55,8 @@ Tests enforce these rules. Do not weaken a test to make a change pass.
   `mcp` package and this module. `TestImportsOnlyTheSDK` (`imports_test.go`)
   parses every file of `mcpkit`, `mcptest`, `budget`, `confine` and `egress`
   and fails on anything else; `egress` and `confine` may not import the SDK
-  either. When run by hand it covers the test files too.
+  either, nor each other: a test that needs both goes in `confine/nettest`.
+  When run by hand it covers the test files too.
 - **No new dependencies.** Every server built on the library inherits them.
   The SDK's `auth` package is off limits, because it pulls in `golang-jwt`.
 - **Stdio only.** Do not add an HTTP or SSE transport.
