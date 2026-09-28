@@ -32,11 +32,25 @@ func TestSeatbeltMissing(t *testing.T) {
 	}
 }
 
+func mustRender(t *testing.T, r resolved) string {
+	t.Helper()
+	profile, err := seatbeltProfile(r)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	return profile
+}
+
 func TestSeatbeltRender(t *testing.T) {
 	r := resolved{
 		readOnly:  []string{"/opt/read \"only\""},
 		readWrite: []string{"/opt/read-write"},
 		tmp:       "/private/tmp/confine-1",
+	}
+	closed := strings.Index(mustRender(t, r), "(deny file-read* (subpath \"/opt\"))\n")
+	opened := strings.Index(mustRender(t, r), "(allow file-read* (subpath \"/opt/read-write\"))\n")
+	if closed < 0 || opened < closed {
+		t.Errorf("the denial of /opt must come before the allowed path, which overrides it: %d, %d", closed, opened)
 	}
 	first, err := seatbeltProfile(r)
 	if err != nil {
@@ -49,7 +63,8 @@ func TestSeatbeltRender(t *testing.T) {
 	for _, rule := range []string{
 		"(deny network*)\n",
 		"(deny file-write*)\n",
-		"(deny file-read*)\n",
+		"(deny file-read* (subpath \"/Users\"))\n",
+		"(deny file-read* (subpath \"/private/var/folders\"))\n",
 		"(allow file-read-metadata (literal \"/opt\"))\n",
 		"(allow file-read* (subpath \"/opt/read \\\"only\\\"\"))\n",
 		"(allow file-read* (subpath \"/opt/read-write\"))\n",

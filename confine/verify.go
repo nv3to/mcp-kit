@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -215,5 +216,10 @@ func attempt(ctx context.Context, profile Profile, name string, args ...string) 
 		return "", nil, err
 	}
 	failed = cmd.Wait()
+	// A command that a signal ended proves nothing about the sandbox.
+	var exit *exec.ExitError
+	if errors.As(failed, &exit) && !exit.Exited() {
+		return "", nil, mcpkit.Errorf(mcpkit.Internal, "confine: verify: %s did not run to its end: %v", name, failed)
+	}
 	return output.String(), failed, nil
 }

@@ -18,18 +18,19 @@ import (
 // becomes the command, /usr/bin/sandbox-exec.
 var seatbeltPath = "/usr/bin/sandbox-exec"
 
-// seatbeltSystem is what a program needs to read to start at all: the
-// system's programs and libraries, its configuration and the devices.
-var seatbeltSystem = []string{
-	"/System",
-	"/usr",
-	"/bin",
-	"/sbin",
-	"/Library",
-	"/dev",
-	"/private/etc",
-	"/private/var/db",
-	"/private/var/select",
+// seatbeltClosed is where the data of users lies: the home directories, the
+// volumes, the temporary directories and what was installed beside the
+// system. Reading is denied there and not everywhere, because a program that
+// cannot read the system is killed before it runs.
+var seatbeltClosed = []string{
+	"/Users",
+	"/Volumes",
+	"/home",
+	"/opt",
+	"/private/tmp",
+	"/private/var/folders",
+	"/private/var/root",
+	"/private/var/tmp",
 }
 
 // seatbeltNested is a profile that restricts something. A sandbox that
@@ -93,15 +94,15 @@ func seatbeltQuote(path string) (string, error) {
 }
 
 // seatbeltProfile renders the profile. A later rule overrides an earlier
-// one, so everything is denied first and the allowed paths follow. The
+// one, so the denials come first and the allowed paths follow. The
 // directories above an allowed path show their metadata and nothing else,
 // which a program needs to find its working directory.
 func seatbeltProfile(r resolved) (string, error) {
 	var b strings.Builder
-	b.WriteString("(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n(deny file-read*)\n")
+	b.WriteString("(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n")
 	b.WriteString("(allow file-write* (literal \"/dev/null\"))\n")
 
-	read := append(append(append([]string{}, seatbeltSystem...), r.readOnly...), r.readWrite...)
+	read := append(append([]string{}, r.readOnly...), r.readWrite...)
 	write := append([]string{}, r.readWrite...)
 	if r.tmp != "" {
 		read = append(read, r.tmp)
@@ -127,6 +128,7 @@ func seatbeltProfile(r resolved) (string, error) {
 		rule  string
 		paths []string
 	}{
+		{"(deny file-read* (subpath %s))\n", seatbeltClosed},
 		{"(allow file-read-metadata (literal %s))\n", dirs},
 		{"(allow file-read* (subpath %s))\n", read},
 		{"(allow file-write* (subpath %s))\n", write},

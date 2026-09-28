@@ -287,12 +287,13 @@ are held to a profile.
   has. A path that does not exist is `not_found`, not a rule dropped in
   silence. A symlink inside a writable path that points out of it does not
   work for the command.
-- **The system stays readable.** A program cannot start without the
-  system's programs, libraries and configuration, so `/System`, `/usr`,
-  `/bin`, `/sbin`, `/Library`, `/dev`, `/private/etc`, `/private/var/db` and
-  `/private/var/select` can be read under every profile. The home directory,
-  the temporary directories and everything else cannot. The program itself
-  must lie in one of these or in a path of the profile.
+- **The system stays readable.** A program that cannot read the system is
+  killed before it runs, so on macOS reading is closed where the data of
+  users lies and not everywhere: `/Users`, `/Volumes`, `/home`, `/opt`,
+  `/private/tmp`, `/private/var/tmp`, `/private/var/folders` and
+  `/private/var/root`. A path of the profile opens its part of them. What
+  lies elsewhere, such as `/Library` and `/private/etc`, can be read under
+  every profile. Nothing can be written outside the profile.
 - **The environment is exact.** The command gets the names in `Env.Pass`
   that the server has set, the pairs in `Env.Set`, `TMPDIR` and
   `MCPKIT_CONFINED=1`, and nothing else.

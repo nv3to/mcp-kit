@@ -107,7 +107,7 @@ type outcome struct {
 }
 
 // try runs one confined command to its end. The canary in its output fails
-// the test whatever the case is about.
+// the test whatever the case is about, and so does a command that was killed.
 func try(t *testing.T, profile confine.Profile, name string, args ...string) outcome {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -120,6 +120,12 @@ func try(t *testing.T, profile confine.Profile, name string, args ...string) out
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err = cmd.Run()
+	// A command that a signal ended did not get as far as the attempt, so
+	// its failure is no evidence that the attempt was refused.
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && !exit.Exited() {
+		t.Fatalf("%s %q did not run to its end: %v: %q", name, args, err, out.String())
+	}
 	if strings.Contains(out.String(), canaryText) {
 		t.Errorf("%s %q printed the canary: %q", name, args, out.String())
 	}
