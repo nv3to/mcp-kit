@@ -19,9 +19,11 @@
 // /etc/ld.so.cache, /etc/localtime and /etc/alternatives where the host has
 // them, a /dev and a /proc of its own, and what the profile names. Its user,
 // process, IPC, host name, control group and network namespaces are its own,
-// so it cannot list the processes of the host and cannot reach a socket of
-// the host. The proxy of Proxy listens on the loopback of the host, which a
-// command on Linux cannot reach: there it reaches nothing.
+// so it cannot list the processes of the host, and the loopback of the host,
+// its network and its abstract unix sockets are out of reach. A unix socket
+// file inside a path of the profile is in reach, which it is not on macOS.
+// The proxy of Proxy listens on the loopback of the host, which a command on
+// Linux cannot reach: there it reaches no address of the network.
 //
 // The package confines the commands a server starts. It does not confine the
 // server itself.

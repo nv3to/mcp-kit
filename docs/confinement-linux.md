@@ -146,8 +146,10 @@ network and pid namespaces, `NoNewPrivs`, `Seccomp` and `CapEff` from
 - The probe asserts nothing; it records each signal as same or different.
 - Consequence for u6: `confine.Confined` on Linux reads the signal the run
   shows to be different and readable without a reference from outside.
-  `uid_map` is the candidate. It also differs in any other container, which
-  is the safe direction: the answer "confined" makes a server skip nesting.
+  `uid_map` is the candidate. It also differs in a container with a user
+  namespace of its own, which is the safe direction: the answer "confined"
+  makes a server skip nesting. A container that runs as root shares the
+  user namespace of the host, and there it does not differ.
 - Consequence for u8: none.
 
 ## Probe 6: bubblewrap inside bubblewrap
@@ -207,10 +209,17 @@ longest; `--chdir` to the working directory; then
 - H: a directory inside a read-only bind cannot be moved either, so it is not
   bound onto itself, which would make it writable.
 - H: with `Proxy` the command has its own network namespace as with `None`
-  (probe 1), so it reaches neither the proxy nor anything else.
+  (probe 1), so it reaches no address of the network, the proxy included.
+- H: the network namespace does not hold a unix socket file. A command
+  connects to one that lies inside a path of its profile, through `--bind`
+  and `--ro-bind` alike (probe 2), where macOS denies the same connect. The
+  backend leaves this open: a filter on unix sockets would also close the
+  socket through which u8 reaches the proxy.
 - H: `/proc/self/uid_map` reads `0 0 4294967295` outside every user
   namespace and something else inside bubblewrap (probe 5): `Confined` is
-  true when it differs or cannot be read.
+  true when it differs or cannot be read. A container that runs as root
+  shares the user namespace of the host and reads the same map, so
+  `Confined` is false there.
 - H: before every command `Command` starts a sandbox under the empty
   profile. When that start fails, the command is refused with what
   `bwrap` printed and, for each setting of

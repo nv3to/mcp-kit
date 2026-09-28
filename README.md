@@ -313,9 +313,14 @@ are held to a profile.
   there, and neither is `/home`, `/root`, `/opt`, `/usr/local`, `/var`,
   `/run` or `/tmp` beside the command's own temporary directory. Its user,
   process, IPC, host name, control group and network namespaces are its own,
-  so no socket of the host is in reach. Name the directory of a tool that
-  lives elsewhere, such as `/usr/local`, in `ReadOnly`. A program whose path
-  holds `=` is `refused`.
+  so the loopback of the host, its network and its abstract unix sockets are
+  out of reach. Name the directory of a tool that lives elsewhere, such as
+  `/usr/local`, in `ReadOnly`. A program whose path holds `=` is `refused`.
+- **On Linux a unix socket in the profile is in reach.** A command can
+  connect to a unix socket file that lies inside a path of its profile,
+  read-only or writable, and so reach the service that listens there. On
+  macOS the same connect is denied. Leave the directories of such sockets,
+  as of an SSH agent or a container engine, out of the profile.
 - **The longer path wins.** A read-only path inside a writable one stays
   read-only, and the directories that lead to it cannot be moved or removed.
   A writable path inside a read-only one can be written. A path that is in
@@ -336,7 +341,10 @@ are held to a profile.
   is the temporary directory.
 - **`Confined`** is true under a sandbox that `confine` started, which sets
   `MCPKIT_CONFINED`, and under any other that refuses a sandbox inside it. On
-  Linux that is any user namespace but the host's, a container's included.
+  Linux that is any user namespace but the host's, such as bubblewrap's or a
+  rootless container's. A container that runs as root shares the user
+  namespace of the host, so there `Confined` is false, and `Command` refuses
+  only when bubblewrap cannot start.
 - **`Verify`** runs commands under a profile, watches them fail to read and
   write outside it, and records the verdict in a directory you choose.
   `Verified` reads it back, after a restart too, and is false once the system
@@ -392,8 +400,9 @@ cmd, err := confine.Command(ctx, profile, "go", "mod", "download")
   a name included, is `invalid`.
 - **On Linux the proxy is out of reach.** The network namespace of the
   command holds a loopback of its own and nothing else, so it cannot reach
-  the loopback of the host where the proxy listens: under `Proxy` the command
-  reaches nothing, as under `None`.
+  the loopback of the host where the proxy listens: under `Proxy`, as under
+  `None`, the command reaches no address of the network. A unix socket inside
+  a path of the profile is no address of the network and stays in reach.
 
 ## API
 

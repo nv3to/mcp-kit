@@ -114,9 +114,9 @@ func bwrapRefused(failed error, output string) error {
 	return fmt.Errorf("bubblewrap cannot start a sandbox: %s; docs/confinement-linux.md says what it needs", reason)
 }
 
-// confined reads the map of user ids. bubblewrap, like a container, maps a
-// few ids and not every id to itself. A map that cannot be read counts as
-// confined, so that Command refuses.
+// confined reads the map of user ids. bubblewrap, like a rootless container,
+// maps a few ids and not every id to itself. A map that cannot be read counts
+// as confined, so that Command refuses.
 func (bubblewrap) confined() bool {
 	data, err := os.ReadFile("/proc/self/uid_map")
 	if err != nil {
