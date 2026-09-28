@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,12 +25,6 @@ const sandboxExec = "/usr/bin/sandbox-exec"
 const childEnv = "MCPKIT_CONFINE_PROBE"
 
 const allowAll = "(version 1)\n(allow default)\n"
-
-// nestRefusal is what sandbox-exec prints when the process that starts it is
-// already under a profile; it then exits with nestExit.
-const nestRefusal = "sandbox_apply: Operation not permitted"
-
-const nestExit = 71
 
 const publicAddr = "1.1.1.1:443"
 
@@ -257,35 +250,65 @@ func TestNameResolution(t *testing.T) {
 
 func TestNesting(t *testing.T) {
 	requireUnconfined(t)
-	inner := filepath.Join(t.TempDir(), "inner.sb")
-	if err := os.WriteFile(inner, []byte(allowAll), 0o600); err != nil {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve the fixture directory: %v", err)
+	}
+	free := filepath.Join(dir, "free.txt")
+	outerDenied := filepath.Join(dir, "outer.txt")
+	innerDenied := filepath.Join(dir, "inner.txt")
+	for _, path := range []string{free, outerDenied, innerDenied} {
+		if err := os.WriteFile(path, []byte("content"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	outer := allowAll + fmt.Sprintf("(deny file-read* (literal %q))\n", outerDenied)
+	inner := filepath.Join(dir, "inner.sb")
+	innerProfile := allowAll + fmt.Sprintf("(deny file-read* (literal %q))\n", innerDenied)
+	if err := os.WriteFile(inner, []byte(innerProfile), 0o600); err != nil {
 		t.Fatalf("write the inner profile: %v", err)
 	}
+	nested := func(path string) result {
+		r := confined(t, outer, nil, sandboxExec, "-f", inner, "/bin/cat", path)
+		r.profile += "inner profile:\n" + innerProfile
+		return r
+	}
 
-	r := confined(t, allowAll, nil, sandboxExec, "-f", inner, "/usr/bin/true")
-	if r.exit != nestExit {
-		t.Errorf("exit status: got %d, want %d", r.exit, nestExit)
+	if r := nested(free); r.exit != 0 || r.stdout != "content" {
+		t.Errorf("nested sandbox: want it to start and run the command\n%s", r.dump())
 	}
-	if !strings.Contains(r.stderr, nestRefusal) {
-		t.Errorf("stderr: got %q, want it to contain %q", r.stderr, nestRefusal)
+	for _, path := range []string{outerDenied, innerDenied} {
+		r := nested(path)
+		if r.exit == 0 || !strings.Contains(r.stderr, "Operation not permitted") {
+			t.Errorf("read of %s under both profiles: want it refused with EPERM\n%s", path, r.dump())
+		}
 	}
-	if t.Failed() {
-		t.Log(r.dump())
+}
+
+// accountHome is the home directory of the account. plz points HOME at the
+// test's own directory and unsets USER, so the shell looks it up.
+func accountHome(t *testing.T) string {
+	t.Helper()
+	name := run(t, nil, "/usr/bin/id", "-un")
+	if name.exit != 0 {
+		t.Fatalf("look up the account name\n%s", name.dump())
 	}
+	tilde := "~" + strings.TrimSpace(name.stdout)
+	r := run(t, nil, "/bin/sh", "-c", "echo "+tilde)
+	home := strings.TrimSpace(r.stdout)
+	if r.exit != 0 || !filepath.IsAbs(home) {
+		t.Fatalf("expand %s\n%s", tilde, r.dump())
+	}
+	home, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("resolve the home directory: %v", err)
+	}
+	return home
 }
 
 func TestHomeReads(t *testing.T) {
 	requireUnconfined(t)
-	// plz points HOME at the test's own directory; the account's home is the
-	// one a real profile denies.
-	account, err := user.Current()
-	if err != nil {
-		t.Fatalf("look up the current user: %v", err)
-	}
-	home, err := filepath.EvalSymlinks(account.HomeDir)
-	if err != nil {
-		t.Fatalf("resolve the home directory: %v", err)
-	}
+	home := accountHome(t)
 	dir, err := os.MkdirTemp(home, ".mcpkit-confine-probe-")
 	if err != nil {
 		t.Fatalf("create the fixture under the home directory: %v", err)
@@ -343,8 +366,7 @@ func TestDetection(t *testing.T) {
 		t.Errorf("unconfined process starting a sandbox: got %q, want started\n%s", got["nest"], free.dump())
 	}
 	held = confined(t, allowAll, env, self(t))
-	want := fmt.Sprintf("nest refused: exit %d: ", nestExit)
-	if !strings.HasPrefix(held.stdout, want) || !strings.Contains(held.stdout, nestRefusal) {
-		t.Errorf("confined process starting a sandbox: want %q and %q\n%s", want, nestRefusal, held.dump())
+	if got := held.outcomes(); got["nest"] != "started" {
+		t.Errorf("confined process starting a sandbox: got %q, want started\n%s", got["nest"], held.dump())
 	}
 }

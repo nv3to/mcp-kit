@@ -8,8 +8,8 @@ Five probes in `confine/probe_darwin_test.go` start a trivial command through
 - `H:` is an inference that no test asserts.
 - Observed on: Darwin 27.0.0 (`kern.osrelease`, which each test also logs).
 
-The probes start sandboxes, so they fail inside one (see probe 3). A confined
-runner leaves them out with `plz test //... --exclude sandbox`.
+A runner that is not allowed to start `sandbox-exec` leaves the probes out
+with `plz test //... --exclude sandbox`.
 
 Every profile below starts with:
 
@@ -65,24 +65,33 @@ Consequence for u5: the profile needs no rule for the resolver.
 
 ## 3. A profile applied inside a confined process
 
-Test: `TestNesting`. `sandbox-exec` runs under the base profile and starts a
-second `sandbox-exec` with the same profile.
+Test: `TestNesting`. `sandbox-exec` runs under an outer profile and starts a
+second `sandbox-exec` with an inner profile, which runs `/bin/cat`. Each
+profile denies one file of its own:
 
-- E: the inner `sandbox-exec` exits with status 71 and does not run the
-  command.
-- E: its standard error contains `sandbox_apply: Operation not permitted`.
-- E: this holds when the outer profile is `(allow default)`, so no rule of the
-  outer profile causes it.
+```scheme
+(deny file-read* (literal "<file>"))
+```
 
-**For plz-mcp u7 to quote:** a sandbox cannot be started inside a sandbox on macOS:
-under any profile, `sandbox-exec` exits with status 71 and prints
-`sandbox_apply: Operation not permitted`. Nesting is refused, not merged.
+- E: the inner `sandbox-exec` starts and runs the command: `/bin/cat` of a
+  file that neither profile names exits with status 0 and prints the file.
+- E: `/bin/cat` of the file the outer profile denies fails with
+  `Operation not permitted`.
+- E: `/bin/cat` of the file the inner profile denies fails with
+  `Operation not permitted`.
+- H: an outer profile can refuse the nesting, which then shows as
+  `sandbox_apply: Operation not permitted`. Both outer profiles probed start
+  from `(allow default)`; which rule refuses it is not probed.
 
-Consequence for u5: confinement is applied once, by the outermost process that
-is not yet confined. Code that may already run confined detects it (probe 5)
-and does not try again.
-Consequence for u7: the proxy runs outside the sandbox, started before the
-confined child.
+**For plz-mcp u7 to quote:** on macOS a sandbox can be started inside a sandbox
+whose profile starts from `(allow default)`, and the process then obeys both
+profiles: what either one denies is denied.
+
+Consequence for u5: confinement can be applied by a process that is already
+confined. The inner profile can only narrow what the outer one allows.
+Consequence for u7: the confined child may start sandboxes of its own; the
+port rule of probe 1 still binds them. The proxy runs outside the sandbox,
+started before the confined child.
 
 ## 4. File reads under the home directory
 
@@ -122,14 +131,13 @@ under the base profile.
 
 - E: the environment of the child is the same in both cases. `sandbox-exec`
   sets no marker.
-- E: a child that is not confined starts `sandbox-exec` with the base profile
-  and `/usr/bin/true`, and it exits with status 0.
-- E: a confined child that does the same gets status 71 and
-  `sandbox_apply: Operation not permitted`.
-- H: `sandbox_check(3)` from `libsystem_sandbox` answers the same question
-  without starting a process. It needs cgo, which the probes do not use.
+- E: a child starts `sandbox-exec` with the base profile and `/usr/bin/true`,
+  and it exits with status 0 whether the child is confined or not. Trying to
+  start a sandbox does not tell the two cases apart.
+- E: so a process cannot tell that it is confined by either means probed.
+- H: `sandbox_check(3)` from `libsystem_sandbox` answers the question. It
+  needs cgo, which the probes do not use.
 
-Consequence for u5: a process detects confinement by trying to start a sandbox
-with `(allow default)`. A caller that wants a cheaper signal sets its own
-environment variable when it starts the confined child.
-Consequence for u7: none beyond probe 3.
+Consequence for u5: the code that starts a confined child sets an environment
+variable of its own as the marker; nothing else is available without cgo.
+Consequence for u7: none.
