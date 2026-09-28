@@ -22,6 +22,9 @@ run of the workflow turns an `H:` about the runner into an `E:`.
 - E: the probes compile for Linux (`plz build -a linux_amd64`).
 - E: no run of the workflow exists. Every statement about the runner below
   is `H:`.
+- E: the tests ran on Linux in a container, as the section "Observed in a
+  container" records. A container is not the runner: it has no AppArmor
+  restriction on user namespaces.
 
 ## Unprivileged user namespaces
 
@@ -229,3 +232,37 @@ longest; `--chdir` to the working directory; then
 - H: the verdict of `Verify` names the version `bwrap --version` prints, that
   the sandbox denies by default, and the release of the kernel, so a verdict
   of another bubblewrap or another kernel does not hold.
+
+## Observed in a container
+
+`go test -count=1 -v ./confine/...` as an unprivileged user, in a container of
+the image `golang:1.25-bookworm` started with `--privileged` by Docker Desktop
+on the development machine.
+
+| | |
+|---|---|
+| System | Debian GNU/Linux 12 (bookworm), arm64 |
+| Kernel | 7.0.12-linuxkit |
+| bubblewrap | 0.8.0 |
+| Go | 1.27.0 |
+
+- E: 70 tests pass, none fails, 11 are skipped: the helper of the probes and
+  the ten network cases of `confine/nettest`, which wait for the forwarder.
+- E: every case of the escape suite passes through the bubblewrap backend,
+  the cases on a read-only path inside a writable one, on a directory above
+  it and on the table of processes among them.
+- E: the probes answer:
+  - bubblewrap starts a sandbox with its own user, process and network
+    namespaces;
+  - with `--unshare-net` neither a public address nor the loopback of the
+    host is reachable;
+  - a unix socket bound into the sandbox is reachable from inside, through a
+    read-write bind and through a read-only one;
+  - a forwarder on the private loopback to a bound unix socket carries an
+    HTTP client, configured by `HTTP_PROXY` alone, to a server outside;
+  - a write lands only inside a read-write bind, and a write through a
+    symlink that leaves it is refused;
+  - a process can tell that it is confined, by `uid_map`, the name of
+    process 1, the namespaces and `NoNewPrivs`;
+  - bubblewrap starts inside bubblewrap.
+- H: the same holds on the runner once user namespaces are allowed there.
