@@ -58,6 +58,21 @@ var bwrapFiles = []string{
 	"/etc/localtime",
 }
 
+// bwrapCertificates are where the distributions keep the certificates they
+// trust, and where their links lead. A command that may connect may read
+// them, to verify the host behind a tunnel through the proxy.
+var bwrapCertificates = []string{
+	"/etc/ca-certificates/extracted",
+	"/etc/pki/ca-trust/extracted",
+	"/etc/pki/tls/cacert.pem",
+	"/etc/pki/tls/cert.pem",
+	"/etc/pki/tls/certs",
+	"/etc/ssl/ca-bundle.pem",
+	"/etc/ssl/cert.pem",
+	"/etc/ssl/certs",
+	"/var/lib/ca-certificates",
+}
+
 // bwrapUserns are the settings of the kernel that refuse the user namespace
 // bubblewrap needs, and the value that refuses it.
 var bwrapUserns = []struct{ name, refuses string }{
@@ -130,8 +145,16 @@ func (bubblewrap) render(r resolved, argv []string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the sandbox is missing: %v", err)
 	}
-	return bwrapArgs(program, bwrapLayout(), r, argv)
+	var self string
+	if r.proxy.IsValid() {
+		if self, err = forwarder(); err != nil {
+			return nil, err
+		}
+	}
+	return bwrapArgs(program, self, bwrapLayout(), r, argv)
 }
+
+func (bubblewrap) relays() bool { return true }
 
 func (bubblewrap) system() string {
 	version := "bubblewrap of an unknown version"
@@ -148,27 +171,39 @@ func (bubblewrap) system() string {
 }
 
 // bwrapEntry is a path of the system as the host has it: a directory or a
-// file, or a symlink and its target.
+// file, or a symlink and its target. A certificate is there under a proxy
+// alone.
 type bwrapEntry struct {
-	path string
-	link string
+	path        string
+	link        string
+	certificate bool
 }
 
-// bwrapLayout finds the paths of bwrapSystem and bwrapFiles on this host.
+// bwrapLayout finds the paths of bwrapSystem, bwrapFiles and
+// bwrapCertificates on this host.
 func bwrapLayout() []bwrapEntry {
 	var layout []bwrapEntry
-	for _, path := range append(append([]string{}, bwrapSystem...), bwrapFiles...) {
-		info, err := os.Lstat(path)
-		if err != nil {
-			continue
-		}
-		entry := bwrapEntry{path: path}
-		if info.Mode()&os.ModeSymlink != 0 {
-			if entry.link, err = os.Readlink(path); err != nil {
+	for _, set := range []struct {
+		paths       []string
+		certificate bool
+	}{
+		{bwrapSystem, false},
+		{bwrapFiles, false},
+		{bwrapCertificates, true},
+	} {
+		for _, path := range set.paths {
+			info, err := os.Lstat(path)
+			if err != nil {
 				continue
 			}
+			entry := bwrapEntry{path: path, certificate: set.certificate}
+			if info.Mode()&os.ModeSymlink != 0 {
+				if entry.link, err = os.Readlink(path); err != nil {
+					continue
+				}
+			}
+			layout = append(layout, entry)
 		}
-		layout = append(layout, entry)
 	}
 	return layout
 }
@@ -215,13 +250,25 @@ type bwrapMount struct {
 //
 // The network is always a namespace of its own, which holds its own loopback
 // alone (docs/confinement-linux.md, probe 1): a proxy on the loopback of the
-// host is out of reach there.
-func bwrapArgs(program string, layout []bwrapEntry, r resolved, argv []string) ([]string, error) {
+// host is out of reach there. With a proxy the forwarder, the program of the
+// server, runs first and starts the command (probe 3). It and the directory
+// of the relay's socket are bound read-only (probe 2), and so are the
+// certificates of the layout.
+func bwrapArgs(program, forwarder string, layout []bwrapEntry, r resolved, argv []string) ([]string, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("there is no program to run")
 	}
 	if strings.Contains(argv[0], "=") {
 		return nil, fmt.Errorf("the program %q holds an equals sign, which %s would take for a variable", argv[0], bwrapEnv)
+	}
+	if r.proxy.IsValid() {
+		if forwarder == "" || r.relay == "" {
+			return nil, fmt.Errorf("a proxy needs the forwarder and the socket of a relay")
+		}
+		if strings.Contains(forwarder, "=") {
+			return nil, fmt.Errorf("the forwarder %q holds an equals sign, which %s would take for a variable", forwarder, bwrapEnv)
+		}
+		argv = append([]string{forwarder, forwardArg, r.proxy.String(), r.relay}, argv...)
 	}
 	var rules []bwrapRule
 	for _, path := range r.readOnly {
@@ -234,17 +281,23 @@ func bwrapArgs(program string, layout []bwrapEntry, r resolved, argv []string) (
 		rules = append(rules, bwrapRule{r.tmp, true})
 	}
 	for _, rule := range rules {
-		for _, system := range append(append([]string{}, bwrapSystem...), bwrapFiles...) {
+		for _, system := range append(append(append([]string{}, bwrapSystem...), bwrapFiles...), bwrapCertificates...) {
 			if rule.write && within(system, rule.path) {
 				return nil, fmt.Errorf("the writable path %s lies inside the system, in %s", rule.path, system)
 			}
 		}
+	}
+	if r.proxy.IsValid() {
+		rules = append(rules, bwrapRule{forwarder, false}, bwrapRule{filepath.Dir(r.relay), false})
 	}
 	mounts := []bwrapMount{
 		{"/dev", 2, []string{"--dev", "/dev"}},
 		{"/proc", 2, []string{"--proc", "/proc"}},
 	}
 	for _, entry := range layout {
+		if entry.certificate && !r.proxy.IsValid() {
+			continue
+		}
 		if entry.link != "" {
 			mounts = append(mounts, bwrapMount{entry.path, 2, []string{"--symlink", entry.link, entry.path}})
 		} else {

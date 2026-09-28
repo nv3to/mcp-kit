@@ -311,7 +311,9 @@ are held to a profile.
   a `/dev` of its own with the device files `null`, `zero`, `full`, `random`,
   `urandom` and `tty`, and a `/proc` of its own. Nothing else of `/etc` is
   there, and neither is `/home`, `/root`, `/opt`, `/usr/local`, `/var`,
-  `/run` or `/tmp` beside the command's own temporary directory. Its user,
+  `/run` or `/tmp` beside the command's own temporary directory, except what
+  a proxy adds: the certificates, the program of the server and the
+  directory of a socket, all read-only. Its user,
   process, IPC, host name, control group and network namespaces are its own,
   so the loopback of the host, its network and its abstract unix sockets are
   out of reach. Name the directory of a tool that lives elsewhere, such as
@@ -358,6 +360,14 @@ are held to a profile.
 takes the address an `egress` proxy listens on and makes it the only
 destination of the command, so the allowlist of the proxy is the network
 policy. Neither package imports the other: the address is all they share.
+On Linux the server calls `confine.Init()` first in `main`.
+
+```go
+func main() {
+	confine.Init() // on Linux the forwarder of a confined command runs here
+	// ...
+}
+```
 
 ```go
 p, err := egress.New(egress.Config{Allow: []string{"proxy.golang.org"}})
@@ -390,6 +400,13 @@ cmd, err := confine.Command(ctx, profile, "go", "mod", "download")
   daemon of macOS, which is out of reach because it fetches what a
   certificate names from outside the sandbox: set `SSL_CERT_FILE` to
   `/private/etc/ssl/cert.pem` in `Env.Set` and it verifies against the file.
+  On Linux the command can read, read-only and where the host has them,
+  `/etc/ssl/certs`, `/etc/ssl/cert.pem`, `/etc/ssl/ca-bundle.pem`,
+  `/etc/pki/tls/certs`, `/etc/pki/tls/cert.pem`, `/etc/pki/tls/cacert.pem`,
+  `/etc/pki/ca-trust/extracted`, `/etc/ca-certificates/extracted` and
+  `/var/lib/ca-certificates`, where the distributions keep the certificates
+  they trust. `curl` and programs written in Go find them there. Nothing
+  else of `/etc` is added.
 - **The proxy variables are set for you.** The command finds
   `http://<addr>` in `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and
   `https_proxy`, and an empty `NO_PROXY` and `no_proxy`, so that no host is
@@ -398,11 +415,32 @@ cmd, err := confine.Command(ctx, profile, "go", "mod", "download")
 - **The address is a port of a loopback address**, written as
   `127.0.0.1:3128`, which is what `(*Proxy).Start` returns. Anything else,
   a name included, is `invalid`.
-- **On Linux the proxy is out of reach.** The network namespace of the
-  command holds a loopback of its own and nothing else, so it cannot reach
-  the loopback of the host where the proxy listens: under `Proxy`, as under
-  `None`, the command reaches no address of the network. A unix socket inside
-  a path of the profile is no address of the network and stays in reach.
+- **On Linux a forwarder carries the connections.** The network namespace of
+  the command holds a loopback of its own and nothing else, so the loopback
+  of the host where the proxy listens is out of reach. The program of the
+  server, started again inside the sandbox before the command, listens on
+  `addr` on the command's own loopback and carries every connection through
+  a unix socket to `confine`, which carries it on to the proxy and nowhere
+  else. `confine.Init()`, called first in `main`, is where that forwarder
+  runs: without the call `Command` refuses a `Proxy` on Linux, and the
+  message names `confine.Init`. The program of the server is readable and
+  executable inside the sandbox.
+- **Each command has a forwarder of its own.** The forwarder starts the
+  command once it listens, and the two end together, also when the command
+  is killed. `Wait` then closes the socket and removes its directory, so
+  nothing the command reached is left listening. The socket lies in a
+  directory of its own in the temporary directory of the system, or in
+  `/tmp` where that path is too long for a unix socket; the directory is
+  read-only inside the sandbox, so the command cannot remove or replace the
+  socket. No other confined command sees it, unless its profile names the
+  directory the socket lies in.
+- **On Linux the command cannot listen.** A seccomp filter makes `listen`
+  fail, and the calls of `io_uring`, through which a ring listens. The
+  filter kills a program built for another architecture, such as a 32-bit
+  one, whose calls it cannot judge. The forwarder runs on `amd64` and
+  `arm64`; on any other architecture `Command` refuses a `Proxy`. Under
+  `None` there is no filter: the command can listen on its own loopback,
+  which nothing outside reaches.
 
 ## API
 
@@ -443,6 +481,7 @@ cmd, err := confine.Command(ctx, profile, "go", "mod", "download")
 | | `Env{Pass, Set}` | the names copied from the server's environment, and fixed pairs |
 | | `Network`, `None` | what the command may reach; `None` closes the network |
 | | `Proxy(addr string) Network` | the network narrowed to the proxy that listens on `addr` |
+| | `Init()` | call first in `main`: runs the forwarder that a `Proxy` needs on Linux |
 | | `Command(ctx, profile, name, args...) (*Cmd, error)` | the command held to the profile; `refused` when that cannot be guaranteed |
 | | `Cmd{Stdout, Stderr, Dir}`, `(*Cmd).Run`, `Start`, `Wait` | used like an `exec.Cmd`; `Wait` removes the temporary directory |
 | | `Confined() bool` | whether this process is under a sandbox already |

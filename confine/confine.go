@@ -22,8 +22,18 @@
 // so it cannot list the processes of the host, and the loopback of the host,
 // its network and its abstract unix sockets are out of reach. A unix socket
 // file inside a path of the profile is in reach, which it is not on macOS.
-// The proxy of Proxy listens on the loopback of the host, which a command on
-// Linux cannot reach: there it reaches no address of the network.
+// With a proxy a forwarder runs first inside the sandbox: the program of the
+// server, started again, which Init turns into the forwarder. It listens on
+// the address of the proxy on the command's own loopback and carries each
+// connection through a unix socket to the proxy outside; the program and the
+// directory of the socket are bound read-only. A seccomp filter keeps the
+// command from listening, and kills a program built for another
+// architecture, such as a 32-bit one, whose calls it cannot judge. The
+// command can read the certificates the distribution trusts, in
+// /etc/ssl/certs, /etc/ssl/cert.pem, /etc/ssl/ca-bundle.pem,
+// /etc/pki/tls/certs, /etc/pki/tls/cert.pem, /etc/pki/tls/cacert.pem,
+// /etc/pki/ca-trust/extracted, /etc/ca-certificates/extracted and
+// /var/lib/ca-certificates where the host has them.
 //
 // The package confines the commands a server starts. It does not confine the
 // server itself.
@@ -112,7 +122,8 @@ var None = Network{}
 // command reaches. The command finds the proxy in HTTP_PROXY, HTTPS_PROXY and
 // their lower-case spellings, beside an empty NO_PROXY; Env may not name
 // these. An address that is not a loopback address with a port makes Command
-// fail with kind invalid.
+// fail with kind invalid. On Linux the server must call Init first in main,
+// or Command refuses.
 func Proxy(addr string) Network {
 	return Network{narrowed: true, proxy: addr}
 }
@@ -135,6 +146,7 @@ type Cmd struct {
 	path  string
 	args  []string
 	tmp   string
+	relay *relay
 	cmd   *exec.Cmd
 }
 
@@ -149,6 +161,9 @@ type resolved struct {
 	// proxy is the one address the command may connect to; the zero value
 	// closes the network.
 	proxy netip.AddrPort
+	// relay is the unix socket through which the command reaches the proxy
+	// where the backend relays; empty elsewhere.
+	relay string
 }
 
 // readable reports whether path lies inside a path the profile can read.
@@ -315,8 +330,9 @@ func Confined() bool {
 //
 // Command fails closed. The error is of kind refused, and the command was not
 // started, when the sandbox of this system is missing or cannot start, when
-// it cannot express the profile, when this process is itself confined, or
-// when the profile makes a directory given to Verify or Verified writable. A
+// it cannot express the profile, when this process is itself confined, when
+// the profile has a proxy on Linux and Init was not called, or when the
+// profile makes a directory given to Verify or Verified writable. A
 // path that does not exist is not_found. A proxy that is not a port of a
 // loopback address is invalid, and so is a variable in Env that confine sets
 // itself.
@@ -353,11 +369,15 @@ func Command(ctx context.Context, profile Profile, name string, args ...string) 
 	if path, err = filepath.Abs(path); err != nil {
 		return nil, mcpkit.Errorf(mcpkit.Invalid, "confine: command %q: %v", name, err)
 	}
-	// The temporary directory does not exist yet. Its parent stands in for
-	// it, so a profile the backend cannot express is refused here.
+	// The temporary directory and the socket of the relay do not exist yet.
+	// Stand-ins take their places, so a profile the backend cannot express is
+	// refused here.
 	trial := paths
 	if trial.tmp, err = resolvePath(os.TempDir()); err != nil {
 		return nil, err
+	}
+	if trial.proxy.IsValid() && b.relays() {
+		trial.relay = filepath.Join(trial.tmp, relaySocket)
 	}
 	if _, err := b.render(trial, append([]string{path}, args...)); err != nil {
 		return nil, mcpkit.Errorf(mcpkit.Refused, "confine: %v", err)
@@ -401,9 +421,22 @@ func (c *Cmd) start(tmp string) error {
 		}
 	}
 	paths.dir = dir
+	var via *relay
+	if paths.proxy.IsValid() && c.via.relays() {
+		if via, err = startRelay(paths.proxy); err != nil {
+			return mcpkit.Errorf(mcpkit.Internal, "confine: the relay to the proxy: %v", err)
+		}
+		paths.relay = via.socket
+	}
+	fail := func(err error) error {
+		if via != nil {
+			via.close()
+		}
+		return err
+	}
 	argv, err := c.via.render(paths, append([]string{c.path}, c.args...))
 	if err != nil {
-		return mcpkit.Errorf(mcpkit.Refused, "confine: %v", err)
+		return fail(mcpkit.Errorf(mcpkit.Refused, "confine: %v", err))
 	}
 	cmd := exec.CommandContext(c.ctx, argv[0], argv[1:]...)
 	cmd.Env = append(append([]string{}, c.env...), paths.proxyEnv()...)
@@ -413,21 +446,28 @@ func (c *Cmd) start(tmp string) error {
 	cmd.Stderr = c.Stderr
 	cmd.WaitDelay = killGrace
 	if err := cmd.Start(); err != nil {
-		return mcpkit.Errorf(mcpkit.Internal, "confine: start: %v", err)
+		return fail(mcpkit.Errorf(mcpkit.Internal, "confine: start: %v", err))
 	}
 	c.cmd = cmd
 	c.tmp = paths.tmp
+	c.relay = via
 	return nil
 }
 
 // Wait waits for the command to end and removes its temporary directory,
-// also when the command was killed through the context. The error is the
-// one exec.Cmd.Wait returns.
+// also when the command was killed through the context. On Linux it closes
+// the relay to the proxy as well, so nothing the command reached is left
+// listening. The error is the one exec.Cmd.Wait returns.
 func (c *Cmd) Wait() error {
 	if c.cmd == nil {
 		return mcpkit.Errorf(mcpkit.Conflict, "confine: the command was not started")
 	}
 	err := c.cmd.Wait()
+	if c.relay != nil {
+		if closeErr := c.relay.close(); err == nil && closeErr != nil {
+			err = mcpkit.Errorf(mcpkit.Internal, "confine: the relay to the proxy: %v", closeErr)
+		}
+	}
 	if removeErr := os.RemoveAll(c.tmp); err == nil && removeErr != nil {
 		err = mcpkit.Errorf(mcpkit.Internal, "confine: temporary directory: %v", removeErr)
 	}

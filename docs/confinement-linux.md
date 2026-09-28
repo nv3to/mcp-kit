@@ -86,9 +86,9 @@ and once with `--ro-bind`.
   socket is not a write to the filesystem it lies on.
 - The probe fails if the read-write bind does not work and records the
   answer for the read-only bind.
-- Consequence for u8: the proxy listens on a unix socket in a directory of
-  its own, and that directory is bound into the sandbox, read-only if the
-  answer allows it.
+- Consequence for u8: a relay in front of the proxy listens on a unix socket
+  in a directory of its own, and that directory is bound into the sandbox,
+  read-only if the answer allows it.
 
 ## Probe 3: a forwarder on the private loopback
 
@@ -107,17 +107,17 @@ server outside.
 - The client must ask for a name that is not a loopback name: an HTTP client
   bypasses its proxy for `localhost` and `127.0.0.1`.
 
-**Mechanism u8 must use to reach the proxy:** the egress proxy listens on a
-unix socket; the socket's directory is bound into the sandbox; a forwarder
-started inside the sandbox before the command listens on the sandbox's own
-`127.0.0.1` and relays to the socket; the command receives `HTTP_PROXY` and
-`HTTPS_PROXY` naming the forwarder. The network namespace has no route out,
-so the proxy is the only destination.
+**Mechanism u8 must use to reach the proxy:** the egress proxy, or a relay
+in front of it, listens on a unix socket; the socket's directory is bound
+into the sandbox; a forwarder started inside the sandbox before the command
+listens on the sandbox's own `127.0.0.1` and relays to the socket; the
+command receives `HTTP_PROXY` and `HTTPS_PROXY` naming the forwarder. The
+network namespace has no route out, so the proxy is the only destination.
 
 - Consequence for u6: none.
-- Consequence for u8: `confine` is handed the path of a socket, not a TCP
-  address, on Linux. The forwarder is a process inside the sandbox, so u8
-  needs a program to run there; the probe uses the test binary itself.
+- Consequence for u8: the forwarder is a process inside the sandbox, so it
+  needs a program to run there; the probe uses the test binary itself, and
+  `confine` uses the program of the server, through `confine.Init`.
 
 ## Probe 4: read-only and read-write binds
 
@@ -187,7 +187,15 @@ variant, so that a namespace that cannot be unshared stops the start;
 `--new-session` and `--die-with-parent`; the binds of the system and of the
 profile, `--dev /dev` and `--proc /proc`, from the shortest path to the
 longest; `--chdir` to the working directory; then
-`-- /usr/bin/env -u PWD` and the command.
+`-- /usr/bin/env -u PWD` and the command. With `Proxy` the binds include,
+read-only, the program of the server, the directory of the relay's socket
+and the certificates of the distribution, and the command follows the
+forwarder: `<program> mcpkit-confine-forward <address of the proxy>
+<socket>`.
+
+The network cases of `confine/nettest` run on Linux in the workflow's step
+"Test", and so do the cases of `confine/nettest/socket_linux_test.go` on the
+socket. No run exists, so the entries on the forwarder are `H:` as well.
 
 - H: the root of the sandbox is an empty file system of its own, and a path
   that is bound appears with the directories that lead to it and nothing
@@ -212,12 +220,38 @@ longest; `--chdir` to the working directory; then
 - H: a directory inside a read-only bind cannot be moved either, so it is not
   bound onto itself, which would make it writable.
 - H: with `Proxy` the command has its own network namespace as with `None`
-  (probe 1), so it reaches no address of the network, the proxy included.
+  (probe 1). Per command, `Start` listens on a unix socket in a directory of
+  its own, in the temporary directory of the system or in `/tmp` where that
+  path is too long for a socket, and relays each connection to the address
+  of the proxy and to nothing else. The forwarder, the program of the server
+  started again with the reserved first argument `mcpkit-confine-forward`
+  that `confine.Init` handles, listens on the address of the proxy on the
+  sandbox's own loopback and carries each connection to the socket, bound
+  read-only (probes 2 and 3). The proxy variables are the same as on macOS.
+- H: the forwarder listens before it starts the command, and exits with the
+  status of the command, or 128 and the signal as bubblewrap does, so the two
+  end together. When the command is killed, bubblewrap dies and with it the
+  process namespace, the forwarder included. `Wait` closes the relay, so
+  nothing is left listening outside.
+- H: before it starts the command the forwarder installs a seccomp filter,
+  with `SECCOMP_FILTER_FLAG_TSYNC` on every thread, that makes `listen`,
+  `io_uring_setup`, `io_uring_enter` and `io_uring_register` fail with
+  `EPERM` and kills a call of another architecture or of the x32 ABI. The
+  command inherits it and cannot listen, as on macOS. bubblewrap has already
+  set `NoNewPrivs` (probe 5). The filter knows `amd64` and `arm64`; on any
+  other architecture `Command` refuses a `Proxy`.
+- H: with `Proxy`, and only then, the certificates are bound read-only:
+  `/etc/ssl/certs`, `/etc/ssl/cert.pem`, `/etc/ssl/ca-bundle.pem`,
+  `/etc/pki/tls/certs`, `/etc/pki/tls/cert.pem`, `/etc/pki/tls/cacert.pem`,
+  `/etc/pki/ca-trust/extracted`, `/etc/ca-certificates/extracted` and
+  `/var/lib/ca-certificates`, each where the host has it and as the link the
+  host has. No socket of the host, no `resolv.conf` and nothing else of
+  `/etc` is bound, so a name does not resolve inside.
 - H: the network namespace does not hold a unix socket file. A command
   connects to one that lies inside a path of its profile, through `--bind`
   and `--ro-bind` alike (probe 2), where macOS denies the same connect. The
   backend leaves this open: a filter on unix sockets would also close the
-  socket through which u8 reaches the proxy.
+  socket through which the forwarder reaches the proxy.
 - H: `/proc/self/uid_map` reads `0 0 4294967295` outside every user
   namespace and something else inside bubblewrap (probe 5): `Confined` is
   true when it differs or cannot be read. A container that runs as root
@@ -247,7 +281,8 @@ on the development machine.
 | Go | 1.27.0 |
 
 - E: 70 tests pass, none fails, 11 are skipped: the helper of the probes and
-  the ten network cases of `confine/nettest`, which wait for the forwarder.
+  the ten network cases of `confine/nettest`, which that run skipped on
+  Linux.
 - E: every case of the escape suite passes through the bubblewrap backend,
   the cases on a read-only path inside a writable one, on a directory above
   it and on the table of processes among them.

@@ -4,19 +4,28 @@
 # whatever its build constraint, so the sources are chosen here.
 
 if CONFIG.OS == "darwin":
-    backend_srcs = ["backend_darwin.go"]
+    backend_srcs = [
+        "backend_darwin.go",
+        "forward_other.go",
+    ]
     escape_srcs = [
         "escape_darwin_test.go",
         "suite_sandbox_test.go",
     ]
 elif CONFIG.OS == "linux":
-    backend_srcs = ["backend_linux.go"]
+    backend_srcs = [
+        "backend_linux.go",
+        "forward_linux.go",
+    ]
     escape_srcs = [
         "escape_linux_test.go",
         "suite_sandbox_test.go",
     ]
 else:
-    backend_srcs = ["backend_other.go"]
+    backend_srcs = [
+        "backend_other.go",
+        "forward_other.go",
+    ]
     escape_srcs = ["suite_other_test.go"]
 
 go_library(
@@ -25,6 +34,7 @@ go_library(
         "backend.go",
         "bwrap.go",
         "confine.go",
+        "forward.go",
         "verify.go",
     ] + backend_srcs,
     visibility = ["PUBLIC"],

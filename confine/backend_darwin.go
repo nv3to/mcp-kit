@@ -104,6 +104,8 @@ func (seatbelt) available() error {
 
 func (seatbelt) confined() bool { return seatbeltConfined() }
 
+func (seatbelt) relays() bool { return false }
+
 func (seatbelt) system() string {
 	release, err := syscall.Sysctl("kern.osrelease")
 	if err != nil {

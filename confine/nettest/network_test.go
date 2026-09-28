@@ -63,9 +63,20 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// The binary is the forwarder of its confined commands as well, and the
+	// forwarder has the environment of the command, so Init comes first. A
+	// generated test main may put flags of its own before the arguments,
+	// where Init looks for the first.
+	given := os.Args
+	rest := given[1:]
+	for len(rest) > 0 && strings.HasPrefix(rest[0], "-test.") {
+		rest = rest[1:]
+	}
+	os.Args = append([]string{given[0]}, rest...)
+	confine.Init()
+	os.Args = given
+
 	if mode := os.Getenv(childEnv); mode != "" {
-		// A generated test main may put flags of its own before the
-		// arguments.
 		var args []string
 		for _, arg := range os.Args[1:] {
 			if !strings.HasPrefix(arg, "-test.") {
@@ -76,6 +87,10 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
+
+// attempts are the attempts that a file of this package adds for its own
+// system.
+var attempts = map[string]func(args []string) int{}
 
 func child(mode string, args []string) int {
 	var err error
@@ -96,6 +111,8 @@ func child(mode string, args []string) int {
 		_, err = net.DefaultResolver.LookupHost(ctx, args[0])
 	case mode == "request" && len(args) == 3:
 		return request(args[0], args[1], args[2])
+	case attempts[mode] != nil:
+		return attempts[mode](args)
 	default:
 		fmt.Printf("unknown attempt %q %q\n", mode, args)
 		return childBroken

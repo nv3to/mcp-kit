@@ -3,6 +3,8 @@ package confine
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	mcpkit "github.com/nv3to/mcp-kit"
 )
@@ -35,11 +38,20 @@ var bwrapMerged = []bwrapEntry{
 	{path: "/etc/alternatives"},
 	{path: "/etc/ld.so.cache"},
 	{path: "/etc/localtime", link: "/usr/share/zoneinfo/Etc/UTC"},
+	{path: "/etc/ssl/cert.pem", link: "certs/ca-certificates.crt", certificate: true},
+	{path: "/etc/ssl/certs", certificate: true},
 }
+
+// The forwarder, the socket of its relay and the proxy of the rendering tests.
+const (
+	testForwarder = "/opt/server/bin/server"
+	testSocket    = "/tmp/confine-proxy-1/proxy"
+	testProxy     = "127.0.0.1:3128"
+)
 
 func mustArgs(t *testing.T, r resolved, argv ...string) []string {
 	t.Helper()
-	args, err := bwrapArgs("/usr/bin/bwrap", bwrapMerged, r, argv)
+	args, err := bwrapArgs("/usr/bin/bwrap", testForwarder, bwrapMerged, r, argv)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -95,7 +107,7 @@ func TestBwrapRender(t *testing.T) {
 			t.Errorf("the sandbox lacks %q:\n%s", want, line)
 		}
 	}
-	for _, path := range []string{"/", "/etc", "/usr", "/usr/local", "/home", "/root", "/opt", "/var", "/tmp", "/run"} {
+	for _, path := range []string{"/", "/etc", "/etc/ssl/certs", "/usr", "/usr/local", "/home", "/root", "/opt", "/var", "/tmp", "/run", testForwarder} {
 		for _, option := range []string{"--bind", "--ro-bind"} {
 			if step(args, option, path, path) >= 0 {
 				t.Errorf("the sandbox binds %s:\n%s", path, line)
@@ -150,10 +162,52 @@ func TestBwrapRenderHeld(t *testing.T) {
 }
 
 func TestBwrapRenderNetwork(t *testing.T) {
-	closed := mustArgs(t, resolved{}, "/bin/cat")
-	narrowed := mustArgs(t, resolved{proxy: netip.MustParseAddrPort("127.0.0.1:3128")}, "/bin/cat")
-	if !reflect.DeepEqual(closed, narrowed) {
-		t.Errorf("a proxy changes the sandbox, want the network a namespace of its own under both:\n%q\n%q", closed, narrowed)
+	closed := mustArgs(t, resolved{}, "/bin/cat", "file")
+	narrowed := mustArgs(t, resolved{proxy: netip.MustParseAddrPort(testProxy), relay: testSocket}, "/bin/cat", "file")
+	for _, args := range [][]string{closed, narrowed} {
+		if step(args, "--unshare-net") < 0 {
+			t.Errorf("the network is no namespace of its own:\n%q", args)
+		}
+	}
+
+	const direct = " -- /usr/bin/env -u PWD /bin/cat file"
+	const forwarded = " -- /usr/bin/env -u PWD " + testForwarder + " " + forwardArg + " " + testProxy + " " + testSocket + " /bin/cat file"
+	if line := strings.Join(closed, " "); !strings.HasSuffix(line, direct) {
+		t.Errorf("with the network closed the command does not end with %q:\n%s", direct, line)
+	}
+	if line := strings.Join(narrowed, " "); !strings.HasSuffix(line, forwarded) {
+		t.Errorf("with a proxy the forwarder does not start the command, want the end %q:\n%s", forwarded, line)
+	}
+
+	bindings := [][]string{
+		{"--ro-bind", testForwarder, testForwarder},
+		{"--ro-bind", "/tmp/confine-proxy-1", "/tmp/confine-proxy-1"},
+		{"--ro-bind", "/etc/ssl/certs", "/etc/ssl/certs"},
+		{"--symlink", "certs/ca-certificates.crt", "/etc/ssl/cert.pem"},
+	}
+	for _, want := range bindings {
+		if step(narrowed, want[0], want[1:]...) < 0 {
+			t.Errorf("with a proxy the sandbox lacks %q:\n%q", want, narrowed)
+		}
+		if step(closed, want[0], want[1:]...) >= 0 {
+			t.Errorf("with the network closed the sandbox has %q:\n%q", want, closed)
+		}
+	}
+	if step(narrowed, "--bind", "/tmp/confine-proxy-1", "/tmp/confine-proxy-1") >= 0 {
+		t.Errorf("the directory of the socket is writable:\n%q", narrowed)
+	}
+
+	for _, r := range []resolved{
+		{proxy: netip.MustParseAddrPort(testProxy)},
+		{proxy: netip.MustParseAddrPort(testProxy), relay: testSocket},
+	} {
+		forwarder := testForwarder
+		if r.relay != "" {
+			forwarder = ""
+		}
+		if args, err := bwrapArgs("/usr/bin/bwrap", forwarder, bwrapMerged, r, []string{"/bin/cat"}); err == nil {
+			t.Errorf("a proxy with the forwarder %q and the socket %q: want it refused, got %q", forwarder, r.relay, args)
+		}
 	}
 }
 
@@ -162,14 +216,115 @@ func TestBwrapCannotExpress(t *testing.T) {
 		{readWrite: []string{"/usr/share"}},
 		{readWrite: []string{"/usr/lib/x86_64-linux-gnu"}},
 		{readWrite: []string{"/etc/alternatives"}},
+		{readWrite: []string{"/etc/ssl/certs"}},
 		{readWrite: []string{"/bin"}},
 	} {
-		if args, err := bwrapArgs("/usr/bin/bwrap", bwrapMerged, r, []string{"/bin/cat"}); err == nil {
+		if args, err := bwrapArgs("/usr/bin/bwrap", "", bwrapMerged, r, []string{"/bin/cat"}); err == nil {
 			t.Errorf("a writable path inside the system %q: want it refused, got %q", r.readWrite, args)
 		}
 	}
-	if args, err := bwrapArgs("/usr/bin/bwrap", bwrapMerged, resolved{}, []string{"/opt/a=b/program"}); err == nil {
+	if args, err := bwrapArgs("/usr/bin/bwrap", "", bwrapMerged, resolved{}, []string{"/opt/a=b/program"}); err == nil {
 		t.Errorf("a program with an equals sign: want it refused, got %q", args)
+	}
+	narrowed := resolved{proxy: netip.MustParseAddrPort(testProxy), relay: testSocket}
+	if args, err := bwrapArgs("/usr/bin/bwrap", "/opt/a=b/server", bwrapMerged, narrowed, []string{"/bin/cat"}); err == nil {
+		t.Errorf("a forwarder with an equals sign: want it refused, got %q", args)
+	}
+}
+
+// This test binary does not call Init.
+func TestBwrapProxyNeedsInit(t *testing.T) {
+	if _, err := forwarder(); err == nil || !strings.Contains(err.Error(), "confine.Init") {
+		t.Errorf("the forwarder without Init: got %v, want an error that names confine.Init", err)
+	}
+	requireLinux(t)
+	cmd, err := Command(context.Background(), Profile{Network: Proxy(testProxy)}, "/usr/bin/true")
+	if !refusal(err) || cmd != nil || !strings.Contains(err.Error(), "confine.Init") {
+		t.Errorf("Command with a proxy and without Init: got %v, want an error of kind refused that names confine.Init, and no command", err)
+	}
+}
+
+// A stand-in for the proxy echoes what it receives.
+func echo(t *testing.T) netip.AddrPort {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				io.Copy(c, c)
+				c.Close()
+			}()
+		}
+	}()
+	return netip.MustParseAddrPort(l.Addr().String())
+}
+
+func TestRelay(t *testing.T) {
+	r, err := startRelay(echo(t))
+	if err != nil {
+		t.Fatalf("start the relay: %v", err)
+	}
+	defer r.close()
+	if len(r.socket) > socketMax || filepath.Dir(r.socket) != r.dir {
+		t.Errorf("the socket is %s, want at most %d bytes in the directory %s", r.socket, socketMax, r.dir)
+	}
+
+	// A half close reaches the proxy, and its answer comes back.
+	c, err := net.Dial("unix", r.socket)
+	if err != nil {
+		t.Fatalf("connect to the relay: %v", err)
+	}
+	defer c.Close()
+	io.WriteString(c, "through the relay")
+	c.(*net.UnixConn).CloseWrite()
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if got, err := io.ReadAll(c); err != nil || string(got) != "through the relay" {
+		t.Errorf("the answer through the relay: got %v and %q, want the echo", err, got)
+	}
+
+	// A connection that stays open ends with the relay, and nothing is left.
+	held, err := net.Dial("unix", r.socket)
+	if err != nil {
+		t.Fatalf("connect to the relay: %v", err)
+	}
+	defer held.Close()
+	io.WriteString(held, "x")
+	held.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.ReadFull(held, make([]byte, 1)); err != nil {
+		t.Fatalf("the echo through the relay: %v", err)
+	}
+	if err := r.close(); err != nil {
+		t.Errorf("close the relay: %v", err)
+	}
+	if n, err := held.Read(make([]byte, 1)); err == nil {
+		t.Errorf("a connection through the closed relay read %d bytes, want its end", n)
+	}
+	if _, err := os.Lstat(r.dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the directory %s of the closed relay: got %v, want it removed", r.dir, err)
+	}
+}
+
+func TestRelayWithADeepTemporaryDirectory(t *testing.T) {
+	deep := filepath.Join(t.TempDir(), strings.Repeat("d", socketMax))
+	if err := os.Mkdir(deep, 0o700); err != nil {
+		t.Fatalf("create %s: %v", deep, err)
+	}
+	t.Setenv("TMPDIR", deep)
+	r, err := startRelay(echo(t))
+	if err != nil {
+		t.Fatalf("start the relay: %v", err)
+	}
+	defer r.close()
+	if len(r.socket) > socketMax || strings.HasPrefix(r.socket, deep) {
+		t.Errorf("the socket is %s, want at most %d bytes outside %s", r.socket, socketMax, deep)
 	}
 }
 

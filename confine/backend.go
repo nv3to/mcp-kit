@@ -10,6 +10,9 @@ type backend interface {
 	// render returns the command line that runs argv, the program and its
 	// arguments, inside the sandbox of the profile. It starts nothing.
 	render(r resolved, argv []string) ([]string, error)
+	// relays reports whether a command reaches its proxy through the unix
+	// socket of a relay, because its network is a namespace of its own.
+	relays() bool
 	// system names the sandbox and the system a verdict holds for.
 	system() string
 }

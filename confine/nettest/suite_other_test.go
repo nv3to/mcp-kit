@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package nettest_test
 
@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// requireBackend skips the test where a confined command cannot reach the
-// proxy, so a run there does not read as evidence.
+// requireBackend skips the test where confine has no sandbox and starts no
+// command, so a run there does not read as evidence.
 func requireBackend(t *testing.T) {
 	t.Helper()
-	t.Skipf("a command that confine starts on %s cannot reach a proxy", runtime.GOOS)
+	t.Skipf("confine has no sandbox on %s", runtime.GOOS)
 }

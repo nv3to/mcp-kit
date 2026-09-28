@@ -29,6 +29,22 @@ const writeScript = `echo written > "$0"`
 // holdScript prints the temporary directory and stays until it is killed.
 const holdScript = `echo "$TMPDIR"; exec /bin/sleep 60`
 
+// TestMain lets the test binary be the forwarder of the commands it
+// confines, as confine.Init does for a server.
+func TestMain(m *testing.M) {
+	// A generated test main may put flags of its own before the arguments,
+	// where Init looks for the first.
+	given := os.Args
+	rest := given[1:]
+	for len(rest) > 0 && strings.HasPrefix(rest[0], "-test.") {
+		rest = rest[1:]
+	}
+	os.Args = append([]string{given[0]}, rest...)
+	confine.Init()
+	os.Args = given
+	os.Exit(m.Run())
+}
+
 type fixture struct {
 	readOnly  string
 	readWrite string
