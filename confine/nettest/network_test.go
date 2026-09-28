@@ -62,21 +62,16 @@ const (
 	childBroken = 2
 )
 
-func TestMain(m *testing.M) {
-	// The binary is the forwarder of its confined commands as well, and the
-	// forwarder has the environment of the command, so Init comes first. A
-	// generated test main may put flags of its own before the arguments,
-	// where Init looks for the first.
-	given := os.Args
-	rest := given[1:]
-	for len(rest) > 0 && strings.HasPrefix(rest[0], "-test.") {
-		rest = rest[1:]
-	}
-	os.Args = append([]string{given[0]}, rest...)
-	confine.Init()
-	os.Args = given
+// The binary is the forwarder of its confined commands as well. The
+// forwarder has the environment of the command, so Init comes before the
+// attempt that TestMain dispatches, and an init function runs before the
+// generated test main, which may put flags of its own before the arguments.
+func init() { confine.Init() }
 
+func TestMain(m *testing.M) {
 	if mode := os.Getenv(childEnv); mode != "" {
+		// A generated test main may put flags of its own before the
+		// arguments.
 		var args []string
 		for _, arg := range os.Args[1:] {
 			if !strings.HasPrefix(arg, "-test.") {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func mustArgs(t *testing.T, r resolved, argv ...string) []string {
 func step(args []string, option string, operands ...string) int {
 	for i := range args {
 		start, end := i+1, i+1+len(operands)
-		if args[i] == option && end <= len(args) && reflect.DeepEqual(args[start:end], operands) {
+		if args[i] == option && end <= len(args) && slices.Equal(args[start:end], operands) {
 			return i
 		}
 	}
@@ -232,8 +233,11 @@ func TestBwrapCannotExpress(t *testing.T) {
 	}
 }
 
-// This test binary does not call Init.
+// go test links the escape suite, which calls Init, into this binary; the
+// flag is cleared for the test.
 func TestBwrapProxyNeedsInit(t *testing.T) {
+	called := initialized.Swap(false)
+	t.Cleanup(func() { initialized.Store(called) })
 	if _, err := forwarder(); err == nil || !strings.Contains(err.Error(), "confine.Init") {
 		t.Errorf("the forwarder without Init: got %v, want an error that names confine.Init", err)
 	}
