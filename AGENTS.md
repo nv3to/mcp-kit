@@ -17,6 +17,7 @@ building stdio MCP servers on the official SDK
 | `serve.go` | `Serve`: the stdio transport, the stdout redirect, the hold on EOF |
 | `mcptest/` | the in-memory test client |
 | `budget/` | `Cut`, the log `Store` with `Page` and `Search`, the fluff-removal steps |
+| `egress/` | the forward proxy that reads from allowlisted hosts only; standard library only |
 | `mcpkit_test.go` | the toy server that every behaviour test drives |
 | `imports_test.go` | the dependency guard |
 | `plugins/`, `third_party/go/` | Please plugin and pinned Go modules and toolchain |
@@ -50,8 +51,9 @@ Tests enforce these rules. Do not weaken a test to make a change pass.
 
 - **Imports.** The only imports allowed are the standard library, the SDK's
   `mcp` package and this module. `TestImportsOnlyTheSDK` (`imports_test.go`)
-  parses every file of `mcpkit`, `mcptest` and `budget` and fails on anything
-  else. When run by hand it covers the test files too.
+  parses every file of `mcpkit`, `mcptest`, `budget` and `egress` and fails on
+  anything else; `egress` may not import the SDK either. When run by hand it
+  covers the test files too.
 - **No new dependencies.** Every server built on the library inherits them.
   The SDK's `auth` package is off limits, because it pulls in `golang-jwt`.
 - **Stdio only.** Do not add an HTTP or SSE transport.

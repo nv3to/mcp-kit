@@ -16,7 +16,7 @@ const (
 )
 
 // packages are the directories of the module's packages, the root first.
-var packages = []string{".", "mcptest", "budget"}
+var packages = []string{".", "mcptest", "budget", "egress"}
 
 // sourceDirs finds the directory of every package. Under plz the sources
 // arrive as test data next to the working directory; run by hand they sit
@@ -49,6 +49,9 @@ func sourceDirs(t *testing.T) []string {
 func TestImportsOnlyTheSDK(t *testing.T) {
 	checked := 0
 	for _, dir := range sourceDirs(t) {
+		// egress has no use for the protocol: the standard library and
+		// this module are all it may import.
+		sdkAllowed := filepath.Base(dir) != "egress"
 		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
@@ -66,13 +69,13 @@ func TestImportsOnlyTheSDK(t *testing.T) {
 				}
 				std := !strings.Contains(strings.SplitN(path, "/", 2)[0], ".")
 				self := path == module || strings.HasPrefix(path, module+"/")
-				if !std && !self && path != sdk {
-					t.Errorf("%s imports %s: mcpkit may import only the standard library, %s and itself", file, path, sdk)
+				if !std && !self && !(sdkAllowed && path == sdk) {
+					t.Errorf("%s imports %s: mcpkit may import only the standard library, %s (not from egress) and itself", file, path, sdk)
 				}
 			}
 		}
 	}
-	if checked < 8 {
+	if checked < 10 {
 		t.Errorf("checked only %d source files; the walk is not seeing the package", checked)
 	}
 }

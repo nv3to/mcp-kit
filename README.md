@@ -194,6 +194,60 @@ text = budget.Clean(text, budget.StripColour, budget.ReplacePath(checkout, "."),
   again, directly after itself or further down, and writes the count under it:
   `[the 3 lines above occur 4 times]`.
 
+## Egress proxy
+
+A confined command often has to download its dependencies. Package `egress`
+is a forward proxy for that: it reads from the hosts you name and refuses
+everything else. It uses the standard library only and knows nothing of
+confinement; pointing the command at the proxy and closing every other route
+is up to you.
+
+```go
+p, err := egress.New(egress.Config{
+	Allow: []string{"proxy.golang.org", "*.githubusercontent.com"},
+	OnRefuse: func(r egress.Refusal) {
+		log.Printf("egress refused %s %s: %s", r.Method, r.Host, r.Reason)
+	},
+})
+if err != nil {
+	return err
+}
+addr, err := p.Start(ctx) // 127.0.0.1 and a port the system chose
+if err != nil {
+	return err
+}
+defer p.Close()
+cmd.Env = append(cmd.Env, "HTTP_PROXY=http://"+addr, "HTTPS_PROXY=http://"+addr)
+```
+
+| Request | Served when | Otherwise refused as |
+|---|---|---|
+| any | the host matches `Allow`: an exact name, a `*.suffix` pattern (subdomains only), or a listed literal address | `host not allowed` |
+| any | the host is not, and does not resolve to, a loopback, private, unique-local, link-local, unspecified, multicast, reserved or metadata address, IPv4 or IPv6 | `address not allowed` |
+| plain HTTP | the method is `GET` or `HEAD` | `method not allowed` |
+| plain HTTP, `CONNECT` | there is no body and no content length | `body not allowed` |
+| plain HTTP | the port is 80 | `port not allowed` |
+| `CONNECT` | the port is 443 | `port not allowed` |
+
+A refused request gets `403` and one plain line, `egress: <reason>`, and
+`OnRefuse` receives the host, the method and the reason. The reasons are a
+closed set.
+
+- **The address is checked where it counts.** The proxy resolves a name once,
+  refuses if any answer is forbidden, and dials the address it checked, never
+  the name. A name that resolves differently a moment later changes nothing.
+  The default dialer checks the address again as the socket connects. Listing
+  a forbidden address in `Allow` does not make it reachable.
+- **Redirects are the client's.** The proxy hands a redirect back as it is.
+  The client follows it, and the next hop is checked as a request of its own.
+- **Tunnels are opaque.** `CONNECT` carries TLS end to end; the proxy does not
+  intercept it, so inside a tunnel it cannot tell a read from a write.
+- **Limits.** The header size, the idle time of a tunnel and the number of
+  client connections are bounded: `MaxHeaderBytes`, `IdleTimeout`, `MaxConns`.
+- **A narrow channel remains.** An allowed host that accepts uploads over
+  `GET` parameters, or over anything inside a tunnel, can still receive data.
+  Allow only hosts you would trust with what the command can read.
+
 ## API
 
 | Package | Identifier | Purpose |
@@ -220,13 +274,22 @@ text = budget.Clean(text, budget.StripColour, budget.ReplacePath(checkout, "."),
 | | `(*Log).Search(pattern, max) (matches, total, err)` | matching lines as `Match{Line, Text}`, and the true total |
 | | `Step`, `Clean(text, steps...)` | fluff removal, step by step |
 | | `StripColour`, `CollapseRepeats`, `ReplacePath(prefix, with)` | the steps |
+| `egress` | `New(Config) (*Proxy, error)` | a proxy for an allowlist; fails on a malformed entry |
+| | `Config{Allow, OnRefuse, Resolver, Dial, MaxHeaderBytes, IdleTimeout, MaxConns}` | the allowlist, the refusal callback, the replaceable resolver and dialer, the limits |
+| | `(*Proxy).Start(ctx) (addr string, err error)` | serve on a loopback port the system chooses, until `ctx` ends |
+| | `(*Proxy).Serve(net.Listener) error` | serve on your own listener, such as a unix socket |
+| | `(*Proxy).Close() error` | stop listening and close every connection and tunnel |
+| | `Refusal{Host, Method, Reason}` | one refused request |
+| | `Reason`, `HostNotAllowed`, `MethodNotAllowed`, `BodyNotAllowed`, `AddressNotAllowed`, `PortNotAllowed` | why it was refused |
+| | `Resolver` | the lookup `*net.Resolver` implements |
+| | `DefaultMaxHeaderBytes`, `DefaultIdleTimeout`, `DefaultMaxConns` | the limits a zero `Config` gets |
 
 Full documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/nv3to/mcp-kit).
 
 ## Limits
 
-- **Stdio only and no auth.** There is no HTTP or SSE transport, and the SDK's
-  `auth` package is not used.
+- **Stdio only and no auth.** There is no HTTP or SSE transport for MCP, and
+  the SDK's `auth` package is not used.
 - **Tools only.** There are no resources, prompts, completions or tool
   annotations. `Unwrap()` is the escape hatch. A tool registered through it
   skips mcp-kit's registration checks but still passes through the gate and the
