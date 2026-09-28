@@ -288,13 +288,20 @@ are held to a profile.
   has. A path that does not exist is `not_found`, not a rule dropped in
   silence. A symlink inside a writable path that points out of it does not
   work for the command.
-- **The system stays readable.** A program that cannot read the system is
-  killed before it runs, so on macOS reading is closed where the data of
-  users lies and not everywhere: `/Users`, `/Volumes`, `/home`, `/opt`,
-  `/private/tmp`, `/private/var/tmp`, `/private/var/folders` and
-  `/private/var/root`. A path of the profile opens its part of them. What
-  lies elsewhere, such as `/Library` and `/private/etc`, can be read under
-  every profile. Nothing can be written outside the profile.
+- **Everything is denied that the profile does not allow.** On macOS the
+  sandbox starts from `(deny default)`. Beside the paths of the profile, a
+  command can read and execute what a program needs to run at all: `/System`,
+  `/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/lib`, `/usr/libexec`,
+  `/usr/share`, the time zone and the device files `null`, `zero`, `random`
+  and `urandom`. It cannot read `/etc`, `/Library`, `/Applications`,
+  `/usr/local`, `/opt` or a home directory, cannot execute a file outside
+  these paths, and cannot reach a service of the system: `/usr/bin/open`,
+  Apple events and `launchctl` fail. Name the directory of a tool that lives
+  elsewhere, such as `/opt/homebrew`, in `ReadOnly`.
+- **The longer path wins.** A read-only path inside a writable one stays
+  read-only, and a writable path inside a read-only one can be written.
+- **Accounts do not resolve.** A command that looks up a user by name or
+  number gets no answer, so `id` prints numbers.
 - **The environment is exact.** The command gets the names in `Env.Pass`
   that the server has set, the pairs in `Env.Set`, `TMPDIR` and
   `MCPKIT_CONFINED=1`, the proxy variables when the network is a proxy, and
@@ -345,6 +352,9 @@ cmd, err := confine.Command(ctx, profile, "go", "mod", "download")
   as well.
 - **Names do not resolve inside.** The command hands the name to the proxy,
   which resolves it outside the sandbox and checks the address.
+- **Certificates can be verified.** With a proxy, and only then, the command
+  can read `/private/etc/ssl` and reach the trust daemon of macOS, which a
+  TLS client needs to verify the certificate of the host behind the tunnel.
 - **The proxy variables are set for you.** The command finds
   `http://<addr>` in `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and
   `https_proxy`, and an empty `NO_PROXY` and `no_proxy`, so that no host is

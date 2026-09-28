@@ -542,3 +542,125 @@ func TestVerdict(t *testing.T) {
 		}
 	}
 }
+
+func TestEscapeReadOfASystemFile(t *testing.T) {
+	eachNetwork(t, escapeReadOfASystemFile)
+}
+
+// The accounts of the system are no part of any profile, and no program
+// needs them to run.
+func escapeReadOfASystemFile(t *testing.T, f fixture) {
+	const accounts = "/etc/passwd"
+	if !exists(accounts) {
+		t.Fatalf("%s does not exist, so the attempt proves nothing", accounts)
+	}
+	if r := try(t, f.profile, "/bin/cat", accounts); r.err == nil {
+		t.Errorf("read of %s: want it to fail, got %q", accounts, r.output)
+	}
+}
+
+func TestEscapeWriteToAReadOnlyPathInsideAWritableOne(t *testing.T) {
+	eachNetwork(t, escapeWriteToAReadOnlyPathInsideAWritableOne)
+}
+
+func escapeWriteToAReadOnlyPathInsideAWritableOne(t *testing.T, f fixture) {
+	kept := filepath.Join(f.readWrite, "kept")
+	if err := os.Mkdir(kept, 0o700); err != nil {
+		t.Fatalf("create %s: %v", kept, err)
+	}
+	file := filepath.Join(kept, "file.txt")
+	write(t, file, "kept")
+	f.profile.ReadOnly = append(f.profile.ReadOnly, kept)
+
+	r := try(t, f.profile, "/bin/sh", "-c", writeScript, file)
+	if got := content(t, file); r.err == nil || got != "kept" {
+		t.Errorf("write over %s: want it to fail, got %v and the content %q", file, r.err, got)
+	}
+	created := filepath.Join(kept, "created.txt")
+	r = try(t, f.profile, "/bin/sh", "-c", writeScript, created)
+	if r.err == nil || exists(created) {
+		t.Errorf("write of %s: want it to fail, got %v and %q", created, r.err, r.output)
+	}
+	moved := filepath.Join(f.readWrite, "moved")
+	r = try(t, f.profile, "/bin/mv", kept, moved)
+	if r.err == nil || exists(moved) || !exists(file) {
+		t.Errorf("move of %s: want it to fail, got %v and %q", kept, r.err, r.output)
+	}
+	if r := try(t, f.profile, "/bin/cat", file); r.err != nil || r.output != "kept" {
+		t.Errorf("read of %s: got %v and %q, want the content", file, r.err, r.output)
+	}
+}
+
+func TestWritablePathInsideAReadOnlyOne(t *testing.T) {
+	f := newFixture(t)
+	out := filepath.Join(f.readOnly, "out")
+	if err := os.Mkdir(out, 0o700); err != nil {
+		t.Fatalf("create %s: %v", out, err)
+	}
+	f.profile.ReadWrite = append(f.profile.ReadWrite, out)
+
+	target := filepath.Join(out, "written.txt")
+	r := try(t, f.profile, "/bin/sh", "-c", writeScript, target)
+	if r.err != nil || !exists(target) {
+		t.Errorf("write of %s: got %v and %q, want it written", target, r.err, r.output)
+	}
+	beside := filepath.Join(f.readOnly, "written.txt")
+	r = try(t, f.profile, "/bin/sh", "-c", writeScript, beside)
+	if r.err == nil || exists(beside) {
+		t.Errorf("write of %s: want it to fail, got %v and %q", beside, r.err, r.output)
+	}
+}
+
+// program is a script that prints the file named after it.
+const program = "#!/bin/sh\nexec /bin/cat \"$1\"\n"
+
+func writeProgram(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(program), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func TestEscapeRunAProgramOutsideTheProfile(t *testing.T) {
+	eachNetwork(t, escapeRunAProgramOutsideTheProfile)
+}
+
+func escapeRunAProgramOutsideTheProfile(t *testing.T, f fixture) {
+	inside := filepath.Join(f.readOnly, "program")
+	outside := filepath.Join(f.outside, "program")
+	writeProgram(t, inside)
+	writeProgram(t, outside)
+
+	if r := try(t, f.profile, inside, f.allowed); r.err != nil || r.output != "allowed" {
+		t.Fatalf("%s: got %v and %q, want it to run", inside, r.err, r.output)
+	}
+	if r := try(t, f.profile, outside, f.allowed); r.err == nil || strings.Contains(r.output, "allowed") {
+		t.Errorf("%s: want it not to run, got %v and %q", outside, r.err, r.output)
+	}
+}
+
+func TestCommandInAConfinedProcess(t *testing.T) {
+	f := newFixture(t)
+	t.Setenv(confine.Marker, "1")
+	if !confine.Confined() {
+		t.Errorf("Confined: got false with %s set, want true", confine.Marker)
+	}
+	cmd, err := confine.Command(context.Background(), f.profile, "/bin/cat", f.allowed)
+	if kindOf(err) != mcpkit.Refused || cmd != nil {
+		t.Errorf("Command in a confined process: got %v, want an error of kind refused and no command", err)
+	}
+}
+
+func TestStartThatFailsHasAKind(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd, err := confine.Command(ctx, f.profile, "/bin/cat", f.allowed)
+	if err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	cancel()
+	if err := cmd.Start(); kindOf(err) != mcpkit.Internal {
+		cmd.Wait()
+		t.Errorf("Start under a context that ended: got %v, want an error of kind internal", err)
+	}
+}

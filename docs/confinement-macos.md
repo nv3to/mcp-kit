@@ -11,12 +11,15 @@ Five probes in `confine/probe_darwin_test.go` start a trivial command through
 A runner that is not allowed to start `sandbox-exec` leaves the probes out
 with `plz test //... --exclude sandbox`.
 
-Every profile below starts with:
+The profiles of probes 1 to 5 start with:
 
 ```scheme
 (version 1)
 (allow default)
 ```
+
+Probe 6 is about the profile that `confine` renders, which starts with
+`(deny default)`.
 
 ## 1. Outbound traffic to one loopback port
 
@@ -151,3 +154,93 @@ Consequence for u5: the code that starts a confined child sets an environment
 variable of its own as the marker. It is the only signal that is cheap and
 does not depend on the profile.
 Consequence for u7: none.
+
+
+## 6. Deny by default
+
+Tests: the escape suite, `confine/escape_test.go` and
+`confine/escape_darwin_test.go`, through `confine.Command`. An entry marked
+"by hand" was observed with `sandbox-exec` on the same system and no test
+asserts it.
+
+```scheme
+(version 1)
+(deny default)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow sysctl-read)
+(allow file-write* (literal "/dev/null"))
+(allow file-read* process-exec (subpath "/System"))   ; and the other system paths
+(allow file-read* (literal "/"))
+(allow file-read-metadata (literal "/private"))       ; and the links at the root
+(allow file-read* process-exec (subpath "<path of the profile>"))
+(allow file-write* (subpath "<writable path>"))
+(deny file-write* (subpath "<read-only path>"))
+```
+
+What a program needs to run:
+
+- E: `/bin/sh`, `/bin/cat`, `/bin/ls`, `/bin/mv`, `/usr/bin/env` and a script
+  inside the profile run under this profile (the positive cases of the suite).
+- E, by hand: without `(allow file-read* (literal "/"))` every program is
+  killed as it starts. `sandbox-exec` exits with status 134, which is
+  `SIGABRT`, and prints nothing. This is the mark of a profile that denies
+  something the dynamic linker needs.
+- E, by hand: `/bin/sh` reads `/private/var/select/sh`. `git` and `make` in
+  `/usr/bin` read `/private/var/select/developer_dir` and then the developer
+  tools, which lie outside the system paths and must be named in the profile.
+- E, by hand: `/bin/date` prints UTC unless `/private/var/db/timezone` and
+  `/private/etc/localtime` can be read.
+- E, by hand: `/Library/Apple` is not needed.
+- E, by hand: the Go toolchain runs with its directory named in the profile
+  (`go version`, `go env`). It looks at the home directory and goes on when
+  that is denied.
+- E, by hand: `/usr/bin/id -un` prints the number of the account, not its
+  name. The lookup goes to `com.apple.system.opendirectoryd.libinfo`, which
+  is denied.
+
+What is refused:
+
+- E: `/bin/cat /etc/passwd` fails (`TestEscapeReadOfASystemFile`).
+- E: a canary is not read through its second name under
+  `/System/Volumes/Data`, and a read-only path is not written through it
+  (`TestEscapeReadThroughTheDataVolume`). Seatbelt matches the path a file
+  really has.
+- E: `/usr/bin/open -g -a Calculator` fails and no application starts
+  (`TestEscapeStartAnApplication`). Under `(allow default)` the application
+  starts, outside the sandbox.
+- E: `/bin/launchctl list` fails (`TestEscapeAskTheServiceManager`).
+- E: a script outside the profile is not executed, and the same script inside
+  it is (`TestEscapeRunAProgramOutsideTheProfile`). `process-exec` is allowed
+  for the readable paths only.
+- E, by hand: a Go program that needs no library is executed from a path it
+  cannot be read from when `process-exec` is allowed everywhere. Reading and
+  executing are separate operations.
+- E, by hand: `/usr/bin/osascript` cannot send an Apple event.
+
+One path inside another:
+
+- E: a later rule overrides an earlier one, as in probe 1, so the rules are
+  written from the shortest path to the longest. A read-only path inside a
+  writable one cannot be written, created in or moved
+  (`TestEscapeWriteToAReadOnlyPathInsideAWritableOne`), and a writable path
+  inside a read-only one can be written (`TestWritablePathInsideAReadOnlyOne`).
+
+Certificates:
+
+- E, by hand: with the network open and nothing else added, a TLS client in
+  Go fails with `x509: OSStatus -26276`, and `/usr/bin/curl` fails to read
+  `/private/etc/ssl/openssl.cnf`.
+- E, by hand: with `(allow mach-lookup (global-name "com.apple.trustd.agent"))`
+  and `(allow file-read* (subpath "/private/etc/ssl"))` both fetch
+  `https://proxy.golang.org/`, and the Go client still refuses an expired
+  certificate.
+- H: no other service is needed for a download through a proxy. The denials
+  that remain in the log (`com.apple.logd`,
+  `com.apple.system.notification_center`, `com.apple.SystemConfiguration.configd`)
+  did not stop either client.
+
+Consequence for `confine`: the two rules for certificates are rendered with a
+proxy and not without one. A tool that lives outside the system paths is named
+in the profile by the server. The verdict of `Verify` names the sandbox as
+"deny by default", so a verdict recorded under another profile does not hold.

@@ -4,6 +4,12 @@
 // command that cannot be held to its profile is refused, never started
 // unconfined.
 //
+// The sandbox denies what no rule allows. Beside the profile, a command can
+// read and execute the system itself, which every program needs to run: on
+// macOS /System, /bin, /sbin, /usr/bin, /usr/sbin, /usr/lib, /usr/libexec and
+// /usr/share. It cannot read /etc, /Library, /Applications or a home
+// directory, and it cannot reach a service of the system.
+//
 // The package confines the commands a server starts. It does not confine the
 // server itself.
 package confine
@@ -44,8 +50,10 @@ var (
 )
 
 // Profile states what a confined command may touch. Anything it does not
-// name is out of reach. The zero Profile allows the command's own temporary
-// directory and nothing else of the user's.
+// name is out of reach, except the system itself as the package comment lists
+// it. The zero Profile allows the command's own temporary directory and
+// nothing else. Where one path lies inside another, the longer one decides:
+// a ReadOnly path inside a ReadWrite path cannot be written.
 type Profile struct {
 	// ReadOnly lists the files and directories the command may read.
 	ReadOnly []string
@@ -385,7 +393,7 @@ func (c *Cmd) start(tmp string) error {
 	cmd.Stderr = c.Stderr
 	cmd.WaitDelay = killGrace
 	if err := cmd.Start(); err != nil {
-		return err
+		return mcpkit.Errorf(mcpkit.Internal, "confine: start: %v", err)
 	}
 	c.cmd = cmd
 	c.tmp = paths.tmp

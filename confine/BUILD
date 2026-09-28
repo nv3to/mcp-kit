@@ -15,7 +15,10 @@ go_library(
 go_test(
     name = "escape_test",
     srcs = ["escape_test.go"] +
-           (["suite_darwin_test.go"] if CONFIG.OS == "darwin" else ["suite_other_test.go"]),
+           ([
+               "escape_darwin_test.go",
+               "suite_darwin_test.go",
+           ] if CONFIG.OS == "darwin" else ["suite_other_test.go"]),
     external = True,
     labels = ["sandbox"],
     deps = [
