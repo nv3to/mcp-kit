@@ -1,0 +1,25 @@
+$ make -C /Users/dev/work/acme test
+[1m==> compiling[0m /Users/dev/work/acme/cmd/acme
+[33mwarning:[0m /Users/dev/work/acme/internal/cache/lru.go:41: field épaisseur is never read
+    41 |     épaisseur int
+       |     ^
+[1m==> compiling[0m /Users/dev/work/acme/cmd/acmectl
+[33mwarning:[0m /Users/dev/work/acme/internal/cache/lru.go:41: field épaisseur is never read
+    41 |     épaisseur int
+       |     ^
+[1m==> compiling[0m /Users/dev/work/acme/cmd/acmed
+[33mwarning:[0m /Users/dev/work/acme/internal/cache/lru.go:41: field épaisseur is never read
+    41 |     épaisseur int
+       |     ^
+[1m==> testing[0m /Users/dev/work/acme/internal/store
+dial tcp 10.0.0.7:5432: connect: connection refused
+  retrying in 2s → attempt failed
+dial tcp 10.0.0.7:5432: connect: connection refused
+  retrying in 2s → attempt failed
+dial tcp 10.0.0.7:5432: connect: connection refused
+  retrying in 2s → attempt failed
+[31m--- FAIL: TestOpen (6.01s)[0m
+    store_test.go:58: open: dial tcp 10.0.0.7:5432: connect: connection refused
+[32m✓[0m internal/cache 12 tests
+[31m✗[0m internal/store 1 of 9 tests failed
+make: *** [test] Error 1

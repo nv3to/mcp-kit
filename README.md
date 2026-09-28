@@ -159,6 +159,41 @@ ends. A session has three methods:
 Two package functions read a result: `mcptest.Text(res)` and
 `mcptest.Decode(t, res, &out)`.
 
+## Bounding output
+
+A tool that runs a command keeps the full output in a `budget.Store` and
+returns a part that fits a cap, with the handle to reach the rest:
+
+```go
+store, err := budget.NewStore(dir, 20) // the 20 newest logs
+log, err := store.Create()
+cmd.Stdout, cmd.Stderr = log, log
+cmd.Run()
+
+text, next, end := log.Page(1, 4000)
+text = budget.Clean(text, budget.StripColour, budget.ReplacePath(checkout, "."), budget.CollapseRepeats)
+// return text, log.Handle(), next and end to the caller
+```
+
+- **A cap counts characters**, not bytes, and no character is ever split.
+- **A position is a 1-based line number** of the log as written. Cleaning
+  works on text already taken out, so it never moves a position.
+- **`Cut`** cuts a text after the last whole line that fits and reports how
+  many characters it left out.
+- **`Page`** returns whole lines. Following `next` until `end` visits every
+  line once. A line longer than the cap alone is returned cut to the cap, and
+  `next` still moves on. `Page` has no error result; after a loop that ended
+  early, `Err` says why.
+- **`Search`** takes a pattern of the standard `regexp` package and returns at
+  most `max` matches along with the true total. A pattern that does not compile
+  is `invalid`.
+- **`Open`** knows only the handles `Create` issued. Anything else, an empty
+  handle or a path included, is `not_found`: a handle never becomes part of a
+  file name. A log the store evicted or closed is `not_found` too.
+- **`CollapseRepeats`** keeps the first copy of a block of lines that occurs
+  again, directly after itself or further down, and writes the count under it:
+  `[the 3 lines above occur 4 times]`.
+
 ## API
 
 | Package | Identifier | Purpose |
@@ -175,6 +210,16 @@ Two package functions read a result: `mcptest.Text(res)` and
 | `mcptest` | `Connect(t, s) *Session` | in-memory client session |
 | | `(*Session).ListTools`, `Call`, `CallErr` | drive the server |
 | | `Text(res)`, `Decode(t, res, &out)` | read a result |
+| `budget` | `Cut(text, cap) (kept, omitted)` | the whole lines that fit the cap, and how much was left out |
+| | `NewStore(dir, max) (*Store, error)` | keep at most `max` full logs in `dir` |
+| | `(*Store).Create() (*Log, error)` | a new log, evicting the oldest when full |
+| | `(*Store).Open(handle) (*Log, error)` | find a log again; `not_found` otherwise |
+| | `(*Store).Close() error` | remove every log |
+| | `(*Log).Write`, `Handle`, `Lines`, `Err` | the `io.Writer` for a command, its handle, its line count, the failure of a `Page` |
+| | `(*Log).Page(from, cap) (text, next, end)` | whole lines from a position, within the cap |
+| | `(*Log).Search(pattern, max) (matches, total, err)` | matching lines as `Match{Line, Text}`, and the true total |
+| | `Step`, `Clean(text, steps...)` | fluff removal, step by step |
+| | `StripColour`, `CollapseRepeats`, `ReplacePath(prefix, with)` | the steps |
 
 Full documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/nv3to/mcp-kit).
 

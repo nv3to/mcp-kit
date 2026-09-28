@@ -15,9 +15,12 @@ const (
 	sdk    = "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// sourceDirs finds this package's directory and mcptest's. Under plz the
-// sources arrive as test data next to the working directory; run by hand
-// they sit beside this file.
+// packages are the directories of the module's packages, the root first.
+var packages = []string{".", "mcptest", "budget"}
+
+// sourceDirs finds the directory of every package. Under plz the sources
+// arrive as test data next to the working directory; run by hand they sit
+// beside this file.
 func sourceDirs(t *testing.T) []string {
 	t.Helper()
 	bases := []string{"."}
@@ -25,13 +28,18 @@ func sourceDirs(t *testing.T) []string {
 		bases = append(bases, filepath.Dir(file))
 	}
 	for _, base := range bases {
-		own, _ := filepath.Glob(filepath.Join(base, "*.go"))
-		sub, _ := filepath.Glob(filepath.Join(base, "mcptest", "*.go"))
-		if len(own) > 0 && len(sub) > 0 {
-			return []string{base, filepath.Join(base, "mcptest")}
+		var dirs []string
+		for _, pkg := range packages {
+			dir := filepath.Join(base, pkg)
+			if files, _ := filepath.Glob(filepath.Join(dir, "*.go")); len(files) > 0 {
+				dirs = append(dirs, dir)
+			}
+		}
+		if len(dirs) == len(packages) {
+			return dirs
 		}
 	}
-	t.Fatalf("cannot find the mcpkit and mcptest sources from %v", bases)
+	t.Fatalf("cannot find the sources of %v from %v", packages, bases)
 	return nil
 }
 
@@ -64,7 +72,7 @@ func TestImportsOnlyTheSDK(t *testing.T) {
 			}
 		}
 	}
-	if checked < 4 {
+	if checked < 8 {
 		t.Errorf("checked only %d source files; the walk is not seeing the package", checked)
 	}
 }

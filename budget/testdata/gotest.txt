@@ -1,0 +1,14 @@
+=== RUN   TestParse
+=== RUN   TestParse/empty
+=== RUN   TestParse/naïve_input
+    parse_test.go:31: got "café", want "cafe"
+=== RUN   TestParse/日本語
+--- FAIL: TestParse (0.00s)
+    --- PASS: TestParse/empty (0.00s)
+    --- FAIL: TestParse/naïve_input (0.00s)
+    --- PASS: TestParse/日本語 (0.00s)
+=== RUN   TestRender
+--- PASS: TestRender (0.02s)
+
+FAIL
+exit status 1
