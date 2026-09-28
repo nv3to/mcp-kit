@@ -20,6 +20,7 @@ building stdio MCP servers on the official SDK
 | `egress/` | the forward proxy that reads from allowlisted hosts only; standard library only |
 | `mcpkit_test.go` | the toy server that every behaviour test drives |
 | `imports_test.go` | the dependency guard |
+| `confine/` | probes of what a Seatbelt profile can express (macOS, label `sandbox`); results in `docs/confinement-macos.md` |
 | `plugins/`, `third_party/go/` | Please plugin and pinned Go modules and toolchain |
 
 ## Commands

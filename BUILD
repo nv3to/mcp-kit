@@ -54,6 +54,7 @@ repo_lint(
     packages = [
         "//",
         "//budget",
+        "//confine",
         "//egress",
         "//mcptest",
     ],
