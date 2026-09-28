@@ -16,7 +16,7 @@ const (
 )
 
 // packages are the directories of the module's packages, the root first.
-var packages = []string{".", "mcptest", "budget", "egress"}
+var packages = []string{".", "mcptest", "budget", "confine", "egress"}
 
 // sourceDirs finds the directory of every package. Under plz the sources
 // arrive as test data next to the working directory; run by hand they sit

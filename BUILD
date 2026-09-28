@@ -16,8 +16,8 @@ go_library(
     deps = ["///third_party/go/github.com_modelcontextprotocol_go-sdk//mcp"],
 )
 
-# The library sources the import test parses; mcptest, budget and egress
-# export their own. The test files are the test target's own srcs and are
+# The library sources the import test parses; mcptest, budget, confine and
+# egress export their own. The test files are the test target's own srcs and are
 # not repeated as data.
 filegroup(
     name = "sources",
@@ -35,6 +35,7 @@ go_test(
     data = [
         ":sources",
         "//budget:sources",
+        "//confine:sources",
         "//egress:sources",
         "//mcptest:sources",
     ],

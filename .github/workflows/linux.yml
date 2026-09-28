@@ -1,0 +1,66 @@
+name: linux
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Environment
+        run: |
+          uname -a
+          grep PRETTY_NAME /etc/os-release
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-}"
+
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap
+          bwrap --version
+
+      # Ubuntu 23.10 and later refuse unprivileged user namespaces through
+      # AppArmor unless the program has a profile that allows them. The
+      # setting is changed only when bubblewrap cannot start without it, so
+      # the log shows whether the runner needed it. The same command is what
+      # a human runs on their own machine (docs/confinement-linux.md).
+      - name: Unprivileged user namespaces
+        run: |
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+          sysctl kernel.unprivileged_userns_clone || true
+          sysctl user.max_user_namespaces || true
+          if bwrap --ro-bind / / --unshare-user --unshare-net true; then
+            echo "userns: bubblewrap starts without a change to the runner"
+          else
+            echo "userns: bubblewrap refused; lifting the AppArmor restriction for this runner"
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            bwrap --ro-bind / / --unshare-user --unshare-net true
+            echo "userns: bubblewrap starts after the restriction was lifted"
+          fi
+
+      - name: Install Please at the version pinned in .plzconfig
+        run: |
+          version="$(sed -n 's/^Version *= *//p' .plzconfig)"
+          test -n "$version"
+          mkdir -p "$HOME/.please"
+          curl -fsSL "https://get.please.build/linux_amd64/${version}/please_${version}.tar.xz" \
+            | tar -xJ --strip-components=1 -C "$HOME/.please"
+          ln -s please "$HOME/.please/plz"
+          echo "$HOME/.please" >> "$GITHUB_PATH"
+          "$HOME/.please/plz" --version
+
+      # Every test, the ones labelled `sandbox` included.
+      - name: Test
+        run: plz test //... --plain_output
+
+      # The same probes again with their output shown: this log is the
+      # evidence docs/confinement-linux.md cites.
+      - name: Probe log
+        run: plz test //... --include sandbox --rerun --show_output --plain_output
