@@ -268,20 +268,24 @@ func TestNesting(t *testing.T) {
 	if err := os.WriteFile(inner, []byte(innerProfile), 0o600); err != nil {
 		t.Fatalf("write the inner profile: %v", err)
 	}
-	nested := func(path string) result {
-		r := confined(t, outer, nil, sandboxExec, "-f", inner, "/bin/cat", path)
-		r.profile += "inner profile:\n" + innerProfile
-		return r
+
+	r := confined(t, allowAll, nil, sandboxExec, "-p", allowAll, "/bin/cat", free)
+	if r.exit != 0 || r.stdout != "content" {
+		t.Errorf("both profiles allow everything: want the inner sandbox to start\n%s", r.dump())
 	}
 
-	if r := nested(free); r.exit != 0 || r.stdout != "content" {
-		t.Errorf("nested sandbox: want it to start and run the command\n%s", r.dump())
+	// The outer profile works on its own, so the refusal below is the nesting.
+	if r := confined(t, outer, nil, "/bin/cat", free); r.exit != 0 || r.stdout != "content" {
+		t.Fatalf("the outer profile alone: want the command to run\n%s", r.dump())
 	}
-	for _, path := range []string{outerDenied, innerDenied} {
-		r := nested(path)
-		if r.exit == 0 || !strings.Contains(r.stderr, "Operation not permitted") {
-			t.Errorf("read of %s under both profiles: want it refused with EPERM\n%s", path, r.dump())
-		}
+	if r := confined(t, outer, nil, "/bin/cat", outerDenied); r.exit == 0 || !strings.Contains(r.stderr, "Operation not permitted") {
+		t.Fatalf("the outer profile alone: want the read of %s refused with EPERM\n%s", outerDenied, r.dump())
+	}
+
+	r = confined(t, outer, nil, sandboxExec, "-f", inner, "/bin/cat", free)
+	r.profile += "inner profile:\n" + innerProfile
+	if r.exit != 71 || r.stdout != "" || !strings.Contains(r.stderr, "sandbox_apply: Operation not permitted") {
+		t.Errorf("both profiles deny something: want the inner sandbox refused with exit 71 and sandbox_apply EPERM\n%s", r.dump())
 	}
 }
 

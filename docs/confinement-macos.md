@@ -66,32 +66,37 @@ Consequence for u5: the profile needs no rule for the resolver.
 ## 3. A profile applied inside a confined process
 
 Test: `TestNesting`. `sandbox-exec` runs under an outer profile and starts a
-second `sandbox-exec` with an inner profile, which runs `/bin/cat`. Each
-profile denies one file of its own:
+second `sandbox-exec` with an inner profile, which runs `/bin/cat` on a file
+that no profile names. Two pairs of profiles are probed: both are the base
+profile alone, or each adds one rule that denies a file of its own:
 
 ```scheme
 (deny file-read* (literal "<file>"))
 ```
 
-- E: the inner `sandbox-exec` starts and runs the command: `/bin/cat` of a
-  file that neither profile names exits with status 0 and prints the file.
-- E: `/bin/cat` of the file the outer profile denies fails with
-  `Operation not permitted`.
-- E: `/bin/cat` of the file the inner profile denies fails with
-  `Operation not permitted`.
-- H: an outer profile can refuse the nesting, which then shows as
-  `sandbox_apply: Operation not permitted`. Both outer profiles probed start
-  from `(allow default)`; which rule refuses it is not probed.
+- E: when both profiles are the base profile alone, the inner `sandbox-exec`
+  starts and the command runs: status 0, and the file is printed.
+- E: when each profile denies a file, the inner `sandbox-exec` exits with
+  status 71 and does not run the command.
+- E: its standard error is then
+  `sandbox-exec: sandbox_apply: Operation not permitted`.
+- E: the outer profile that denies a file works on its own: the command runs,
+  and the denied file is refused. The refusal comes from the nesting.
+- H: a profile that is `(allow default)` alone does not count as confinement,
+  and any profile that restricts something refuses a second one. The two
+  mixed pairs, which would show whether the outer or the inner profile
+  decides, are not probed.
 
-**For plz-mcp u7 to quote:** on macOS a sandbox can be started inside a sandbox
-whose profile starts from `(allow default)`, and the process then obeys both
-profiles: what either one denies is denied.
+**For plz-mcp u7 to quote:** on macOS a sandbox cannot be started inside a
+sandbox whose profile restricts anything: `sandbox-exec` exits with status 71
+and prints `sandbox_apply: Operation not permitted`. Nesting is refused, not
+merged.
 
-Consequence for u5: confinement can be applied by a process that is already
-confined. The inner profile can only narrow what the outer one allows.
-Consequence for u7: the confined child may start sandboxes of its own; the
-port rule of probe 1 still binds them. The proxy runs outside the sandbox,
-started before the confined child.
+Consequence for u5: confinement is applied once, by the process that is not
+yet confined. Code that may already run confined must expect the refusal and
+must not treat it as a reason to run unconfined.
+Consequence for u7: a confined child cannot start sandboxes of its own. The
+proxy runs outside the sandbox, started before the confined child.
 
 ## 4. File reads under the home directory
 
@@ -134,10 +139,15 @@ under the base profile.
 - E: a child starts `sandbox-exec` with the base profile and `/usr/bin/true`,
   and it exits with status 0 whether the child is confined or not. Trying to
   start a sandbox does not tell the two cases apart.
-- E: so a process cannot tell that it is confined by either means probed.
+- E: so under the base profile a process cannot tell that it is confined by
+  either means probed.
+- H: under a profile that restricts something, the attempt to start a sandbox
+  is refused as in probe 3, and the refusal is a signal. Probe 3 observes it
+  for an inner profile that restricts something too, not for the base profile.
 - H: `sandbox_check(3)` from `libsystem_sandbox` answers the question. It
   needs cgo, which the probes do not use.
 
 Consequence for u5: the code that starts a confined child sets an environment
-variable of its own as the marker; nothing else is available without cgo.
+variable of its own as the marker. It is the only signal that is cheap and
+does not depend on the profile.
 Consequence for u7: none.
