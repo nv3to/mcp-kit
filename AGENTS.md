@@ -20,7 +20,7 @@ building stdio MCP servers on the official SDK
 | `egress/` | the forward proxy that reads from allowlisted hosts only; standard library only |
 | `mcpkit_test.go` | the toy server that every behaviour test drives |
 | `imports_test.go` | the dependency guard |
-| `confine/` | `Profile`, `Command`, `Confined`, `Verify`, `Verified`: a command held to a profile, through `sandbox-exec` on macOS; the escape suite and the probes behind `docs/confinement-macos.md` and `docs/confinement-linux.md` (label `sandbox`) |
+| `confine/` | `Profile`, `Command`, `Confined`, `Verify`, `Verified`: a command held to a profile, through `sandbox-exec` on macOS and bubblewrap on Linux; the escape suite and the probes behind `docs/confinement-macos.md` and `docs/confinement-linux.md` (label `sandbox`) |
 | `confine/nettest/` | the network cases of the escape suite: a confined command against a real `egress` proxy (label `sandbox`) |
 | `plugins/`, `third_party/go/` | Please plugin and pinned Go modules and toolchain |
 

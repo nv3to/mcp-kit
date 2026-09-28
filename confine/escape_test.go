@@ -559,6 +559,16 @@ func escapeReadOfASystemFile(t *testing.T, f fixture) {
 	}
 }
 
+// /usr/share is part of the system on macOS and on Linux alike.
+func TestEscapeWritablePathInsideTheSystem(t *testing.T) {
+	f := newFixture(t)
+	f.profile.ReadWrite = append(f.profile.ReadWrite, "/usr/share")
+	cmd, err := confine.Command(context.Background(), f.profile, "/usr/bin/true")
+	if kindOf(err) != mcpkit.Refused || cmd != nil {
+		t.Errorf("a writable path inside the system: got %v, want an error of kind refused and no command", err)
+	}
+}
+
 func TestEscapeWriteToAReadOnlyPathInsideAWritableOne(t *testing.T) {
 	eachNetwork(t, escapeWriteToAReadOnlyPathInsideAWritableOne)
 }

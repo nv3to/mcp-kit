@@ -3,7 +3,6 @@
 package confine_test
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,9 +12,6 @@ import (
 	"testing"
 	"time"
 	"unsafe"
-
-	mcpkit "github.com/nv3to/mcp-kit"
-	"github.com/nv3to/mcp-kit/confine"
 )
 
 // dataVolume is where macOS keeps the files of users. Every path below it is
@@ -137,14 +133,5 @@ func escapeListTheProcesses(t *testing.T, f fixture) {
 	f.profile.Env.Set = map[string]string{childEnv: "1"}
 	if r := try(t, f.profile, self, childRun); r.err == nil || !strings.Contains(r.output, "refused") {
 		t.Errorf("read of the table of processes: want it refused, got %v and %q", r.err, r.output)
-	}
-}
-
-func TestEscapeWritablePathInsideTheSystem(t *testing.T) {
-	f := newFixture(t)
-	f.profile.ReadWrite = append(f.profile.ReadWrite, "/usr/share")
-	cmd, err := confine.Command(context.Background(), f.profile, "/usr/bin/true")
-	if kindOf(err) != mcpkit.Refused || cmd != nil {
-		t.Errorf("a writable path inside the system: got %v, want an error of kind refused and no command", err)
 	}
 }

@@ -112,12 +112,12 @@ func (seatbelt) system() string {
 	return "sandbox-exec, deny by default, on Darwin " + release
 }
 
-func (seatbelt) render(r resolved) ([]string, error) {
+func (seatbelt) render(r resolved, argv []string) ([]string, error) {
 	profile, err := seatbeltProfile(r)
 	if err != nil {
 		return nil, err
 	}
-	return []string{seatbeltPath, "-p", profile}, nil
+	return append([]string{seatbeltPath, "-p", profile}, argv...), nil
 }
 
 // seatbeltQuote writes path as a string of the profile language. A control

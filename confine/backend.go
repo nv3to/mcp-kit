@@ -7,9 +7,9 @@ type backend interface {
 	available() error
 	// confined reports whether this process is inside a sandbox already.
 	confined() bool
-	// render returns the arguments that go before the command. It is a
-	// pure function of the profile and starts nothing.
-	render(r resolved) ([]string, error)
+	// render returns the command line that runs argv, the program and its
+	// arguments, inside the sandbox of the profile. It starts nothing.
+	render(r resolved, argv []string) ([]string, error)
 	// system names the sandbox and the system a verdict holds for.
 	system() string
 }

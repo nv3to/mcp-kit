@@ -3,10 +3,30 @@
 # `--exclude sandbox`. The test main is generated from every source given,
 # whatever its build constraint, so the sources are chosen here.
 
+if CONFIG.OS == "darwin":
+    backend_srcs = ["backend_darwin.go"]
+    escape_srcs = [
+        "escape_darwin_test.go",
+        "suite_sandbox_test.go",
+    ]
+elif CONFIG.OS == "linux":
+    backend_srcs = ["backend_linux.go"]
+    escape_srcs = [
+        "escape_linux_test.go",
+        "suite_sandbox_test.go",
+    ]
+else:
+    backend_srcs = ["backend_other.go"]
+    escape_srcs = ["suite_other_test.go"]
+
 go_library(
     name = "confine",
-    srcs = ["backend.go", "confine.go", "verify.go"] +
-           (["backend_darwin.go"] if CONFIG.OS == "darwin" else ["backend_other.go"]),
+    srcs = [
+        "backend.go",
+        "bwrap.go",
+        "confine.go",
+        "verify.go",
+    ] + backend_srcs,
     visibility = ["PUBLIC"],
     deps = ["//:mcpkit"],
 )
@@ -14,11 +34,7 @@ go_library(
 # The escape suite, written against the public API for every backend.
 go_test(
     name = "escape_test",
-    srcs = ["escape_test.go"] +
-           ([
-               "escape_darwin_test.go",
-               "suite_darwin_test.go",
-           ] if CONFIG.OS == "darwin" else ["suite_other_test.go"]),
+    srcs = ["escape_test.go"] + escape_srcs,
     external = True,
     labels = ["sandbox"],
     deps = [
@@ -27,17 +43,18 @@ go_test(
     ],
 )
 
-# What the public API cannot reach: a missing sandbox-exec, the rendering.
-if CONFIG.OS == "darwin":
-    go_test(
-        name = "backend_test",
-        srcs = ["backend_darwin_test.go"],
-        labels = ["sandbox"],
-        deps = [
-            ":confine",
-            "//:mcpkit",
-        ],
-    )
+# What the public API cannot reach: a missing or refused sandbox, the
+# rendering. bwrap_test.go builds on every system, so the rendering of
+# bubblewrap is tested everywhere.
+go_test(
+    name = "backend_test",
+    srcs = ["bwrap_test.go"] + (["backend_darwin_test.go"] if CONFIG.OS == "darwin" else []),
+    labels = ["sandbox"],
+    deps = [
+        ":confine",
+        "//:mcpkit",
+    ],
+)
 
 # Probes of what Seatbelt can express, through /usr/bin/sandbox-exec
 # (docs/confinement-macos.md).

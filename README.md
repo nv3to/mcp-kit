@@ -278,11 +278,14 @@ user, with the user's files. Only the commands it starts through `Command`
 are held to a profile.
 
 - **It fails closed.** `Command` returns `refused`, and starts nothing, when
-  the sandbox of the system is missing, when it cannot express the profile,
-  or when the server is itself confined: a sandbox cannot start inside a
-  sandbox. There is no mode that runs the command unconfined. Only macOS has
-  a sandbox so far, `/usr/bin/sandbox-exec`; on every other system `Command`
-  refuses.
+  the sandbox of the system is missing or cannot start, when it cannot
+  express the profile, or when the server is itself confined: a sandbox
+  cannot start inside a sandbox. There is no mode that runs the command
+  unconfined. The sandbox of macOS is `/usr/bin/sandbox-exec`. On Linux it is
+  bubblewrap, `bwrap` on the `PATH`, which needs unprivileged user
+  namespaces: while the system refuses them, `Command` refuses and names the
+  setting, and [docs/confinement-linux.md](docs/confinement-linux.md) says
+  how a human allows them. On every other system `Command` refuses.
 - **Paths are resolved first.** Each path is made absolute and followed
   through its symlinks, because the sandbox matches the path a file really
   has. A path that does not exist is `not_found`, not a rule dropped in
@@ -299,13 +302,27 @@ are held to a profile.
   lies anywhere else. No service of the system is in reach: `/usr/bin/open`,
   Apple events and `launchctl` fail. Name the directory of a tool that lives
   elsewhere, such as `/opt/homebrew`, in `ReadOnly`.
+- **On Linux the root is empty.** bubblewrap binds into it, read-only, what
+  a program needs to run: `/usr/bin`, `/usr/sbin`, `/usr/lib`, `/usr/lib32`,
+  `/usr/lib64`, `/usr/libx32`, `/usr/libexec` and `/usr/share`; `/bin`,
+  `/sbin`, `/lib`, `/lib32`, `/lib64` and `/libx32`, as the directories or
+  the links the host has; and `/etc/ld.so.cache`, `/etc/localtime` and
+  `/etc/alternatives`. Each is there where the host has it. The command gets
+  a `/dev` of its own with the device files `null`, `zero`, `full`, `random`,
+  `urandom` and `tty`, and a `/proc` of its own. Nothing else of `/etc` is
+  there, and neither is `/home`, `/root`, `/opt`, `/usr/local`, `/var`,
+  `/run` or `/tmp` beside the command's own temporary directory. Its user,
+  process, IPC, host name, control group and network namespaces are its own,
+  so no socket of the host is in reach. Name the directory of a tool that
+  lives elsewhere, such as `/usr/local`, in `ReadOnly`. A program whose path
+  holds `=` is `refused`.
 - **The longer path wins.** A read-only path inside a writable one stays
   read-only, and the directories that lead to it cannot be moved or removed.
   A writable path inside a read-only one can be written. A path that is in
   both lists is read-only. A writable path inside the system is `refused`.
 - **The kernel answers for the machine only.** A command can ask for the
   processor, the memory and the version of the system. It cannot list the
-  processes of the host.
+  processes of the host: on Linux its `/proc` lists its own processes alone.
 - **Accounts do not resolve.** A command that looks up a user by name or
   number gets no answer, so `id` prints numbers.
 - **The environment is exact.** The command gets the names in `Env.Pass`
@@ -318,7 +335,8 @@ are held to a profile.
 - **The working directory** must lie inside a readable path. Left empty, it
   is the temporary directory.
 - **`Confined`** is true under a sandbox that `confine` started, which sets
-  `MCPKIT_CONFINED`, and under any other that refuses a sandbox inside it.
+  `MCPKIT_CONFINED`, and under any other that refuses a sandbox inside it. On
+  Linux that is any user namespace but the host's, a container's included.
 - **`Verify`** runs commands under a profile, watches them fail to read and
   write outside it, and records the verdict in a directory you choose.
   `Verified` reads it back, after a restart too, and is false once the system
@@ -372,6 +390,10 @@ cmd, err := confine.Command(ctx, profile, "go", "mod", "download")
 - **The address is a port of a loopback address**, written as
   `127.0.0.1:3128`, which is what `(*Proxy).Start` returns. Anything else,
   a name included, is `invalid`.
+- **On Linux the proxy is out of reach.** The network namespace of the
+  command holds a loopback of its own and nothing else, so it cannot reach
+  the loopback of the host where the proxy listens: under `Proxy` the command
+  reaches nothing, as under `None`.
 
 ## API
 

@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// requireBackend skips the test where confine has no sandbox, so a run
-// there does not read as evidence.
+// requireBackend skips the test where a confined command cannot reach the
+// proxy, so a run there does not read as evidence.
 func requireBackend(t *testing.T) {
 	t.Helper()
-	t.Skipf("confine has no sandbox for %s", runtime.GOOS)
+	t.Skipf("a command that confine starts on %s cannot reach a proxy", runtime.GOOS)
 }

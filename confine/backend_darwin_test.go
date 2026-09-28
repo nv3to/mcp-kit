@@ -4,20 +4,12 @@ package confine
 
 import (
 	"context"
-	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	mcpkit "github.com/nv3to/mcp-kit"
 )
-
-func refusal(err error) bool {
-	var e *mcpkit.Error
-	return errors.As(err, &e) && e.Kind == mcpkit.Refused
-}
 
 func TestSeatbeltMissing(t *testing.T) {
 	found := seatbeltPath

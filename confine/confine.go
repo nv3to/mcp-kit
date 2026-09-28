@@ -5,12 +5,23 @@
 // unconfined.
 //
 // The sandbox denies what no rule allows. Beside the profile, a command can
-// read and execute the system itself, which every program needs to run: on
-// macOS /System, /bin, /sbin, /usr/bin, /usr/sbin, /usr/lib, /usr/libexec,
-// /usr/share, /private/var/db/dyld and /private/var/select. It cannot read
-// /etc, /Library, /Applications or a home directory, it cannot list the
-// processes of the host, and it cannot reach a service of the system. With a
-// proxy it can read the certificates in /private/etc/ssl.
+// read and execute the system itself, which every program needs to run. On
+// macOS, through sandbox-exec, that is /System, /bin, /sbin, /usr/bin,
+// /usr/sbin, /usr/lib, /usr/libexec, /usr/share, /private/var/db/dyld and
+// /private/var/select. It cannot read /etc, /Library, /Applications or a
+// home directory, it cannot list the processes of the host, and it cannot
+// reach a service of the system. With a proxy it can read the certificates in
+// /private/etc/ssl.
+//
+// On Linux, through bubblewrap, the command sees an empty root with /usr/bin,
+// /usr/sbin, /usr/lib, /usr/lib32, /usr/lib64, /usr/libx32, /usr/libexec,
+// /usr/share, /bin, /sbin, /lib, /lib32, /lib64, /libx32,
+// /etc/ld.so.cache, /etc/localtime and /etc/alternatives where the host has
+// them, a /dev and a /proc of its own, and what the profile names. Its user,
+// process, IPC, host name, control group and network namespaces are its own,
+// so it cannot list the processes of the host and cannot reach a socket of
+// the host. The proxy of Proxy listens on the loopback of the host, which a
+// command on Linux cannot reach: there it reaches nothing.
 //
 // The package confines the commands a server starts. It does not confine the
 // server itself.
@@ -131,6 +142,8 @@ type resolved struct {
 	readOnly  []string
 	readWrite []string
 	tmp       string
+	// dir is the working directory; empty leaves it to the backend.
+	dir string
 	// proxy is the one address the command may connect to; the zero value
 	// closes the network.
 	proxy netip.AddrPort
@@ -298,22 +311,23 @@ func Confined() bool {
 // runs until Start or Run. The name is looked up on the server's PATH; the
 // file it names must lie where the command may read.
 //
-// Command fails closed. The error is of kind refused, and no process was
-// started, when the sandbox of this system is missing, when it cannot
-// express the profile, when this process is itself confined, or when the
-// profile makes a directory given to Verify or Verified writable. A path
-// that does not exist is not_found. A proxy that is not a port of a loopback
-// address is invalid, and so is a variable in Env that confine sets itself.
+// Command fails closed. The error is of kind refused, and the command was not
+// started, when the sandbox of this system is missing or cannot start, when
+// it cannot express the profile, when this process is itself confined, or
+// when the profile makes a directory given to Verify or Verified writable. A
+// path that does not exist is not_found. A proxy that is not a port of a
+// loopback address is invalid, and so is a variable in Env that confine sets
+// itself.
 func Command(ctx context.Context, profile Profile, name string, args ...string) (*Cmd, error) {
 	b, err := pick()
 	if err != nil {
 		return nil, mcpkit.Errorf(mcpkit.Refused, "confine: %v", err)
 	}
-	if err := b.available(); err != nil {
-		return nil, mcpkit.Errorf(mcpkit.Refused, "confine: %v", err)
-	}
 	if Confined() {
 		return nil, mcpkit.Errorf(mcpkit.Refused, "confine: this process is confined, and a sandbox cannot start inside a sandbox")
+	}
+	if err := b.available(); err != nil {
+		return nil, mcpkit.Errorf(mcpkit.Refused, "confine: %v", err)
 	}
 	paths, err := profile.resolve()
 	if err != nil {
@@ -343,7 +357,7 @@ func Command(ctx context.Context, profile Profile, name string, args ...string) 
 	if trial.tmp, err = resolvePath(os.TempDir()); err != nil {
 		return nil, err
 	}
-	if _, err := b.render(trial); err != nil {
+	if _, err := b.render(trial, append([]string{path}, args...)); err != nil {
 		return nil, mcpkit.Errorf(mcpkit.Refused, "confine: %v", err)
 	}
 	return &Cmd{ctx: ctx, via: b, paths: paths, env: env, path: path, args: args}, nil
@@ -384,11 +398,11 @@ func (c *Cmd) start(tmp string) error {
 			return mcpkit.Errorf(mcpkit.Invalid, "confine: the working directory %s is not inside a readable path", c.Dir)
 		}
 	}
-	argv, err := c.via.render(paths)
+	paths.dir = dir
+	argv, err := c.via.render(paths, append([]string{c.path}, c.args...))
 	if err != nil {
 		return mcpkit.Errorf(mcpkit.Refused, "confine: %v", err)
 	}
-	argv = append(append(argv, c.path), c.args...)
 	cmd := exec.CommandContext(c.ctx, argv[0], argv[1:]...)
 	cmd.Env = append(append([]string{}, c.env...), paths.proxyEnv()...)
 	cmd.Env = append(cmd.Env, TempVar+"="+paths.tmp, Marker+"=1")

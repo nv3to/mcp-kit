@@ -164,3 +164,59 @@ started again, once with the same namespaces and once with mounts only.
   answer decides only the message when a server asks for a confined command
   from inside a sandbox.
 - Consequence for u8: none.
+
+## The backend
+
+`confine/bwrap.go` renders a profile to the arguments of `bwrap`, and on
+Linux `Command` runs the command through them. The escape suite
+(`confine/escape_test.go` and `confine/escape_linux_test.go`) and the tests
+of the backend (`confine/bwrap_test.go`) run in the workflow's step "Test".
+No run of the workflow exists, so every entry here is `H:`. The rendering
+tests of `confine/bwrap_test.go` run on every system against a layout
+written into the test; the tests of `Command` through bubblewrap skip where
+the system is not Linux.
+
+The arguments, in order: `--unshare-user`, `--unshare-pid`, `--unshare-ipc`,
+`--unshare-uts`, `--unshare-cgroup` and `--unshare-net`, never a `-try`
+variant, so that a namespace that cannot be unshared stops the start;
+`--new-session` and `--die-with-parent`; the binds of the system and of the
+profile, `--dev /dev` and `--proc /proc`, from the shortest path to the
+longest; `--chdir` to the working directory; then
+`-- /usr/bin/env -u PWD` and the command.
+
+- H: the root of the sandbox is an empty file system of its own, and a path
+  that is bound appears with the directories that lead to it and nothing
+  else of them. `/etc/passwd` is not there, so a read of it fails and
+  accounts do not resolve.
+- H: `--symlink` makes `/bin`, `/sbin`, `/lib` and `/lib64` the links the
+  host has where `/usr` is merged, as on `ubuntu-24.04`, and `/lib64` leads
+  to the dynamic loader in `/usr/lib64`.
+- H: `--dev /dev` gives the command `null`, `zero`, `full`, `random`,
+  `urandom` and `tty`, and `--proc /proc` lists the processes of the
+  command's own process namespace, so the process of the test is not in it.
+- H: bubblewrap sets `PWD` for the command, after every option that changes
+  the environment. `env -u PWD` removes it, so the command gets the
+  environment of its profile and nothing else. `env` would take a program
+  whose path holds `=` for a variable, so such a program is refused.
+- H: a mount point cannot be renamed or removed (`EBUSY`). A writable path
+  is a bind, and so is a writable directory above a read-only path, which is
+  bound onto itself: none of them can be moved, and a read-only path gets no
+  second name. A rename out of a bind into another is refused with `EXDEV`,
+  and GNU `mv` then copies and removes; the removal fails on the read-only
+  bind, so `mv` fails and the read-only file stays where it is.
+- H: a directory inside a read-only bind cannot be moved either, so it is not
+  bound onto itself, which would make it writable.
+- H: with `Proxy` the command has its own network namespace as with `None`
+  (probe 1), so it reaches neither the proxy nor anything else.
+- H: `/proc/self/uid_map` reads `0 0 4294967295` outside every user
+  namespace and something else inside bubblewrap (probe 5): `Confined` is
+  true when it differs or cannot be read.
+- H: before every command `Command` starts a sandbox under the empty
+  profile. When that start fails, the command is refused with what
+  `bwrap` printed and, for each setting of
+  [Unprivileged user namespaces](#unprivileged-user-namespaces) that refuses
+  them, its name and value. `TestBwrapUsernsRefused` stands in for the
+  refusal with a `bwrap` that fails as a refused one does.
+- H: the verdict of `Verify` names the version `bwrap --version` prints, that
+  the sandbox denies by default, and the release of the kernel, so a verdict
+  of another bubblewrap or another kernel does not hold.
