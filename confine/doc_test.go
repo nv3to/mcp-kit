@@ -1,3 +1,5 @@
-// Package confine holds the probes that record what a Seatbelt profile can
-// express on macOS. The observations are in docs/confinement-macos.md.
 package confine
+
+// The probes of what a Seatbelt profile can express exist on macOS only;
+// this file gives their test a source on every other system. The
+// observations are in docs/confinement-macos.md.

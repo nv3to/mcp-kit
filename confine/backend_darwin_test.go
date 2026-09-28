@@ -1,0 +1,80 @@
+//go:build darwin
+
+package confine
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	mcpkit "github.com/nv3to/mcp-kit"
+)
+
+func refusal(err error) bool {
+	var e *mcpkit.Error
+	return errors.As(err, &e) && e.Kind == mcpkit.Refused
+}
+
+func TestSeatbeltMissing(t *testing.T) {
+	found := seatbeltPath
+	seatbeltPath = filepath.Join(t.TempDir(), "sandbox-exec")
+	t.Cleanup(func() { seatbeltPath = found })
+
+	cmd, err := Command(context.Background(), Profile{}, "/usr/bin/true")
+	if !refusal(err) {
+		t.Errorf("got %v, want an error of kind refused", err)
+	}
+	if cmd != nil {
+		t.Errorf("got a command that could be started, want none")
+	}
+}
+
+func TestSeatbeltRender(t *testing.T) {
+	r := resolved{
+		readOnly:  []string{"/opt/read \"only\""},
+		readWrite: []string{"/opt/read-write"},
+		tmp:       "/private/tmp/confine-1",
+	}
+	first, err := seatbeltProfile(r)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	second, err := seatbeltProfile(r)
+	if err != nil || first != second {
+		t.Errorf("render is not a function of the profile:\n%s\n%s", first, second)
+	}
+	for _, rule := range []string{
+		"(deny network*)\n",
+		"(deny file-write*)\n",
+		"(deny file-read*)\n",
+		"(allow file-read-metadata (literal \"/opt\"))\n",
+		"(allow file-read* (subpath \"/opt/read \\\"only\\\"\"))\n",
+		"(allow file-read* (subpath \"/opt/read-write\"))\n",
+		"(allow file-write* (subpath \"/opt/read-write\"))\n",
+		"(allow file-write* (subpath \"/private/tmp/confine-1\"))\n",
+	} {
+		if !strings.Contains(first, rule) {
+			t.Errorf("the profile lacks %q:\n%s", rule, first)
+		}
+	}
+	if strings.Contains(first, "(allow file-write* (subpath \"/opt/read \\\"only\\\"\"))") {
+		t.Errorf("the profile lets the read-only path be written:\n%s", first)
+	}
+}
+
+func TestSeatbeltCannotExpress(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "two\nlines")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("create %q: %v", dir, err)
+	}
+	if (seatbelt{}).confined() {
+		t.Fatal("this test runs inside a sandbox; leave it out with --exclude sandbox")
+	}
+	cmd, err := Command(context.Background(), Profile{ReadOnly: []string{dir}}, "/usr/bin/true")
+	if !refusal(err) || cmd != nil {
+		t.Errorf("got %v, want an error of kind refused and no command", err)
+	}
+}

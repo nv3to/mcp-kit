@@ -199,7 +199,7 @@ text = budget.Clean(text, budget.StripColour, budget.ReplacePath(checkout, "."),
 A confined command often has to download its dependencies. Package `egress`
 is a forward proxy for that: it reads from the hosts you name and refuses
 everything else. It uses the standard library only and knows nothing of
-confinement; pointing the command at the proxy and closing every other route
+`confine`, which keeps the network closed; pointing the command at the proxy and closing every other route
 is up to you.
 
 ```go
@@ -248,6 +248,68 @@ closed set.
   `GET` parameters, or over anything inside a tunnel, can still receive data.
   Allow only hosts you would trust with what the command can read.
 
+## Confining a command
+
+Package `confine` starts a command that can touch only what a profile names.
+You state once what the command may read, write and see of the environment;
+everything else is out of reach, and the network is closed.
+
+```go
+profile := confine.Profile{
+	ReadOnly:  []string{"/opt/homebrew"},
+	ReadWrite: []string{checkout},
+	Env: confine.Env{
+		Pass: []string{"PATH", "LANG"},
+		Set:  map[string]string{"CI": "1"},
+	},
+}
+cmd, err := confine.Command(ctx, profile, "make", "test")
+if err != nil {
+	return err // refused: nothing was started
+}
+cmd.Dir = checkout
+cmd.Stdout, cmd.Stderr = log, log
+err = cmd.Run()
+```
+
+**`confine` does not confine the server itself.** The server runs as the
+user, with the user's files. Only the commands it starts through `Command`
+are held to a profile.
+
+- **It fails closed.** `Command` returns `refused`, and starts nothing, when
+  the sandbox of the system is missing, when it cannot express the profile,
+  or when the server is itself confined: a sandbox cannot start inside a
+  sandbox. There is no mode that runs the command unconfined. Only macOS has
+  a sandbox so far, `/usr/bin/sandbox-exec`; on every other system `Command`
+  refuses.
+- **Paths are resolved first.** Each path is made absolute and followed
+  through its symlinks, because the sandbox matches the path a file really
+  has. A path that does not exist is `not_found`, not a rule dropped in
+  silence. A symlink inside a writable path that points out of it does not
+  work for the command.
+- **The system stays readable.** A program cannot start without the
+  system's programs, libraries and configuration, so `/System`, `/usr`,
+  `/bin`, `/sbin`, `/Library`, `/dev`, `/private/etc`, `/private/var/db` and
+  `/private/var/select` can be read under every profile. The home directory,
+  the temporary directories and everything else cannot. The program itself
+  must lie in one of these or in a path of the profile.
+- **The environment is exact.** The command gets the names in `Env.Pass`
+  that the server has set, the pairs in `Env.Set`, `TMPDIR` and
+  `MCPKIT_CONFINED=1`, and nothing else.
+- **A temporary directory of its own.** Each command gets a fresh directory,
+  named by `TMPDIR`, that no other confined command can see. `Wait` removes
+  it, also when the command was killed through the context.
+- **The working directory** must lie inside a readable path. Left empty, it
+  is the temporary directory.
+- **`Confined`** is true under a sandbox that `confine` started, which sets
+  `MCPKIT_CONFINED`, and under any other that refuses a sandbox inside it.
+- **`Verify`** runs commands under a profile, watches them fail to read and
+  write outside it, and records the verdict in a directory you choose.
+  `Verified` reads it back, after a restart too, and is false once the system
+  changed. Keep that directory out of every profile's writable paths:
+  `Command` refuses a profile that makes it writable once the directory was
+  given to `Verify` or `Verified`.
+
 ## API
 
 | Package | Identifier | Purpose |
@@ -283,6 +345,15 @@ closed set.
 | | `Reason`, `HostNotAllowed`, `MethodNotAllowed`, `BodyNotAllowed`, `AddressNotAllowed`, `PortNotAllowed` | why it was refused |
 | | `Resolver` | the lookup `*net.Resolver` implements |
 | | `DefaultMaxHeaderBytes`, `DefaultIdleTimeout`, `DefaultMaxConns` | the limits a zero `Config` gets |
+| `confine` | `Profile{ReadOnly, ReadWrite, Env, Network}` | what a command may touch |
+| | `Env{Pass, Set}` | the names copied from the server's environment, and fixed pairs |
+| | `Network`, `None` | what the command may reach; `None` closes the network |
+| | `Command(ctx, profile, name, args...) (*Cmd, error)` | the command held to the profile; `refused` when that cannot be guaranteed |
+| | `Cmd{Stdout, Stderr, Dir}`, `(*Cmd).Run`, `Start`, `Wait` | used like an `exec.Cmd`; `Wait` removes the temporary directory |
+| | `Confined() bool` | whether this process is under a sandbox already |
+| | `Verify(ctx, dir) error` | probe the sandbox and record the verdict in `dir` |
+| | `Verified(dir) (ok bool, reason string)` | read the verdict recorded in `dir` |
+| | `Marker`, `TempVar` | the names of the variables every confined command gets |
 
 Full documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/nv3to/mcp-kit).
 
