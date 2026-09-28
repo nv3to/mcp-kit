@@ -289,17 +289,23 @@ are held to a profile.
   silence. A symlink inside a writable path that points out of it does not
   work for the command.
 - **Everything is denied that the profile does not allow.** On macOS the
-  sandbox starts from `(deny default)`. Beside the paths of the profile, a
-  command can read and execute what a program needs to run at all: `/System`,
+  sandbox starts from `(deny default)`. A command can read and execute the
+  paths of its profile and what a program needs to run at all: `/System`,
   `/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/lib`, `/usr/libexec`,
-  `/usr/share`, the time zone and the device files `null`, `zero`, `random`
-  and `urandom`. It cannot read `/etc`, `/Library`, `/Applications`,
-  `/usr/local`, `/opt` or a home directory, cannot execute a file outside
-  these paths, and cannot reach a service of the system: `/usr/bin/open`,
+  `/usr/share`, `/private/var/db/dyld` and `/private/var/select`. It can read
+  the time zone, the root directory and the device files `null`, `zero`,
+  `random` and `urandom`. It cannot read `/etc`, `/Library`, `/Applications`,
+  `/usr/local`, `/opt` or a home directory, and it cannot execute a file that
+  lies anywhere else. No service of the system is in reach: `/usr/bin/open`,
   Apple events and `launchctl` fail. Name the directory of a tool that lives
   elsewhere, such as `/opt/homebrew`, in `ReadOnly`.
 - **The longer path wins.** A read-only path inside a writable one stays
-  read-only, and a writable path inside a read-only one can be written.
+  read-only, and the directories that lead to it cannot be moved or removed.
+  A writable path inside a read-only one can be written. A path that is in
+  both lists is read-only. A writable path inside the system is `refused`.
+- **The kernel answers for the machine only.** A command can ask for the
+  processor, the memory and the version of the system. It cannot list the
+  processes of the host.
 - **Accounts do not resolve.** A command that looks up a user by name or
   number gets no answer, so `id` prints numbers.
 - **The environment is exact.** The command gets the names in `Env.Pass`
@@ -352,9 +358,12 @@ cmd, err := confine.Command(ctx, profile, "go", "mod", "download")
   as well.
 - **Names do not resolve inside.** The command hands the name to the proxy,
   which resolves it outside the sandbox and checks the address.
-- **Certificates can be verified.** With a proxy, and only then, the command
-  can read `/private/etc/ssl` and reach the trust daemon of macOS, which a
-  TLS client needs to verify the certificate of the host behind the tunnel.
+- **Certificates are read from a file.** With a proxy, and only then, the
+  command can read `/private/etc/ssl`, where macOS keeps the certificates it
+  trusts. `curl` finds them there. A program written in Go asks the trust
+  daemon of macOS, which is out of reach because it fetches what a
+  certificate names from outside the sandbox: set `SSL_CERT_FILE` to
+  `/private/etc/ssl/cert.pem` in `Env.Set` and it verifies against the file.
 - **The proxy variables are set for you.** The command finds
   `http://<addr>` in `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and
   `https_proxy`, and an empty `NO_PROXY` and `no_proxy`, so that no host is

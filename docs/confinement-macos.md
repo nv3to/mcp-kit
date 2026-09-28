@@ -168,7 +168,7 @@ asserts it.
 (deny default)
 (allow process-fork)
 (allow signal (target same-sandbox))
-(allow sysctl-read)
+(allow sysctl-read (sysctl-name-prefix "hw.") (sysctl-name "kern.version"))  ; and more of the machine
 (allow file-write* (literal "/dev/null"))
 (allow file-read* process-exec (subpath "/System"))   ; and the other system paths
 (allow file-read* (literal "/"))
@@ -176,6 +176,7 @@ asserts it.
 (allow file-read* process-exec (subpath "<path of the profile>"))
 (allow file-write* (subpath "<writable path>"))
 (deny file-write* (subpath "<read-only path>"))
+(deny file-write* (literal "<writable directory above a read-only path>"))
 ```
 
 What a program needs to run:
@@ -225,22 +226,41 @@ One path inside another:
   writable one cannot be written, created in or moved
   (`TestEscapeWriteToAReadOnlyPathInsideAWritableOne`), and a writable path
   inside a read-only one can be written (`TestWritablePathInsideAReadOnlyOne`).
+- E: a rule holds for the path a file has now. With a rule for the read-only
+  path alone, a command moves a directory above it, or the writable path
+  itself into its temporary directory, and then writes the file under its new
+  name. With `(deny file-write* (literal "<directory>"))` for every writable
+  directory above a read-only path the move fails, and a file beside the
+  read-only path can still be written
+  (`TestEscapeMoveADirectoryAboveAReadOnlyPath`).
+- E: a path in both lists cannot be written
+  (`TestEscapeWriteToAPathThatIsReadOnlyAndWritable`).
+- E: a profile with a writable path inside a system path is refused
+  (`TestEscapeWritablePathInsideTheSystem`).
+
+The kernel:
+
+- E: with `(allow sysctl-read)` a command reads the table of processes of the
+  host, `kern.proc.all`. With the names of the machine and the system alone
+  the read is refused, and the programs of the suite, the Go toolchain among
+  them, still run (`TestEscapeListTheProcesses`).
 
 Certificates:
 
-- E, by hand: with the network open and nothing else added, a TLS client in
-  Go fails with `x509: OSStatus -26276`, and `/usr/bin/curl` fails to read
-  `/private/etc/ssl/openssl.cnf`.
-- E, by hand: with `(allow mach-lookup (global-name "com.apple.trustd.agent"))`
-  and `(allow file-read* (subpath "/private/etc/ssl"))` both fetch
-  `https://proxy.golang.org/`, and the Go client still refuses an expired
-  certificate.
-- H: no other service is needed for a download through a proxy. The denials
-  that remain in the log (`com.apple.logd`,
-  `com.apple.system.notification_center`, `com.apple.SystemConfiguration.configd`)
-  did not stop either client.
+- E, by hand: a TLS client in Go fails with `x509: OSStatus -26276` when it
+  cannot reach `com.apple.trustd.agent`.
+- E, by hand: a certificate can name an address to fetch its issuer from. The
+  trust daemon fetches it, from outside the sandbox, when a confined command
+  that can reach the daemon verifies such a certificate. The command chooses
+  the address, so the daemon is a way around the proxy.
+- E, by hand: with `(allow file-read* (subpath "/private/etc/ssl"))` and
+  without the daemon, `/usr/bin/curl` fetches `https://proxy.golang.org/`
+  through an egress proxy. A client in Go does so with
+  `SSL_CERT_FILE=/private/etc/ssl/cert.pem` and still refuses an expired
+  certificate. `go mod download` fetches a module the same way.
 
-Consequence for `confine`: the two rules for certificates are rendered with a
-proxy and not without one. A tool that lives outside the system paths is named
-in the profile by the server. The verdict of `Verify` names the sandbox as
-"deny by default", so a verdict recorded under another profile does not hold.
+Consequence for `confine`: the certificates are readable with a proxy and not
+without one, and the trust daemon is never in reach. A tool that lives outside
+the system paths is named in the profile by the server. The verdict of
+`Verify` names the sandbox as "deny by default", so a verdict recorded under
+another profile does not hold.

@@ -3,12 +3,19 @@
 package confine_test
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
+
+	mcpkit "github.com/nv3to/mcp-kit"
+	"github.com/nv3to/mcp-kit/confine"
 )
 
 // dataVolume is where macOS keeps the files of users. Every path below it is
@@ -85,5 +92,59 @@ func escapeAskTheServiceManager(t *testing.T, f fixture) {
 	r := try(t, f.profile, "/bin/launchctl", "list")
 	if r.err == nil || strings.Contains(r.output, "com.apple.") {
 		t.Errorf("/bin/launchctl list: want it to fail, got %v and %q", r.err, r.output)
+	}
+}
+
+// childEnv makes TestProcessTable ask the kernel for the table of processes,
+// so that the test binary can be the confined command.
+const childEnv = "MCPKIT_ESCAPE_PROCESSES"
+
+// childRun selects that test alone.
+const childRun = "-test.run=^TestProcessTable$"
+
+func TestProcessTable(t *testing.T) {
+	if os.Getenv(childEnv) == "" {
+		t.Skip("the confined command of TestEscapeListTheProcesses")
+	}
+	// kern.proc.all, asked for its size alone.
+	mib := [4]int32{1, 14, 0, 0}
+	var size uintptr
+	_, _, errno := syscall.Syscall6(syscall.SYS___SYSCTL,
+		uintptr(unsafe.Pointer(&mib[0])), 3, 0, uintptr(unsafe.Pointer(&size)), 0, 0)
+	if errno != 0 || size == 0 {
+		t.Fatalf("refused: %v", errno)
+	}
+	fmt.Println("processes:", size)
+}
+
+func TestEscapeListTheProcesses(t *testing.T) {
+	eachNetwork(t, escapeListTheProcesses)
+}
+
+// The table of processes names every program of the host and its owner.
+func escapeListTheProcesses(t *testing.T, f fixture) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("find the test binary: %v", err)
+	}
+	self = resolve(t, self)
+	outside := exec.Command(self, childRun)
+	outside.Env = []string{childEnv + "=1"}
+	if out, err := outside.CombinedOutput(); err != nil {
+		t.Fatalf("the table cannot be read outside the sandbox, so the attempt proves nothing: %v: %q", err, out)
+	}
+	f.profile.ReadOnly = append(f.profile.ReadOnly, filepath.Dir(self))
+	f.profile.Env.Set = map[string]string{childEnv: "1"}
+	if r := try(t, f.profile, self, childRun); r.err == nil || !strings.Contains(r.output, "refused") {
+		t.Errorf("read of the table of processes: want it refused, got %v and %q", r.err, r.output)
+	}
+}
+
+func TestEscapeWritablePathInsideTheSystem(t *testing.T) {
+	f := newFixture(t)
+	f.profile.ReadWrite = append(f.profile.ReadWrite, "/usr/share")
+	cmd, err := confine.Command(context.Background(), f.profile, "/usr/bin/true")
+	if kindOf(err) != mcpkit.Refused || cmd != nil {
+		t.Errorf("a writable path inside the system: got %v, want an error of kind refused and no command", err)
 	}
 }

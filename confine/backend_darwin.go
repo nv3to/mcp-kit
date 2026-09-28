@@ -58,11 +58,19 @@ var seatbeltLinks = []string{
 	"/var",
 }
 
-// seatbeltTrust is what a program needs to verify a certificate: the daemon
-// that evaluates trust and the certificates of the system. It is allowed
-// with a proxy only, the one case in which a command can open a connection.
-const seatbeltTrust = "(allow mach-lookup (global-name \"com.apple.trustd.agent\"))\n" +
-	"(allow file-read* (subpath \"/private/etc/ssl\"))\n"
+// seatbeltCertificates is where the certificates of the system lie. A
+// command that may connect may read them, to verify the host behind a
+// tunnel. The daemon that evaluates trust stays out of reach: it fetches
+// what a certificate names, from outside the sandbox.
+const seatbeltCertificates = "/private/etc/ssl"
+
+// seatbeltSysctl is what a program may ask the kernel: the machine and the
+// system, and nothing of other processes.
+const seatbeltSysctl = "(allow sysctl-read (sysctl-name-prefix \"hw.\") (sysctl-name-prefix \"machdep.\")" +
+	" (sysctl-name-prefix \"vm.\") (sysctl-name-prefix \"kern.os\") (sysctl-name \"kern.version\")" +
+	" (sysctl-name \"kern.argmax\") (sysctl-name \"kern.hostname\") (sysctl-name \"kern.maxfilesperproc\")" +
+	" (sysctl-name \"kern.ngroups\") (sysctl-name \"kern.usrstack64\") (sysctl-name \"kern.secure_kernel\")" +
+	" (sysctl-name \"sysctl.proc_cputype\") (sysctl-name \"sysctl.proc_native\"))\n"
 
 // seatbeltNested is a profile that restricts something. A sandbox that
 // restricts something refuses it with status 71 (docs/confinement-macos.md,
@@ -133,7 +141,8 @@ type seatbeltRule struct {
 // seatbeltProfile renders the profile. Everything is denied that no rule
 // allows. A later rule overrides an earlier one, so the paths are written
 // from the shortest to the longest: a path inside another follows it, and a
-// read-only path inside a writable one stays read-only. The directories above
+// read-only path inside a writable one stays read-only, as do the
+// directories that lead to it. The directories above
 // a path show their metadata and nothing else, which a program needs to find
 // its working directory. Seatbelt names a loopback address as localhost and
 // in no other way, so the proxy is a port there (docs/confinement-macos.md,
@@ -141,14 +150,15 @@ type seatbeltRule struct {
 func seatbeltProfile(r resolved) (string, error) {
 	var b strings.Builder
 	b.WriteString("(version 1)\n(deny default)\n")
-	b.WriteString("(allow process-fork)\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n")
+	b.WriteString("(allow process-fork)\n(allow signal (target same-sandbox))\n")
+	b.WriteString(seatbeltSysctl)
 	b.WriteString("(allow file-write* (literal \"/dev/null\"))\n")
 	if r.proxy.IsValid() {
 		if !r.proxy.Addr().IsLoopback() {
 			return "", fmt.Errorf("the proxy %s is not on a loopback address, which a Seatbelt profile cannot express", r.proxy)
 		}
 		fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%d\"))\n", r.proxy.Port())
-		b.WriteString(seatbeltTrust)
+		fmt.Fprintf(&b, "(allow file-read* (subpath %q))\n", seatbeltCertificates)
 	}
 
 	var paths []seatbeltRule
@@ -161,7 +171,42 @@ func seatbeltProfile(r resolved) (string, error) {
 	if r.tmp != "" {
 		paths = append(paths, seatbeltRule{r.tmp, true})
 	}
-	sort.SliceStable(paths, func(i, j int) bool { return len(paths[i].path) < len(paths[j].path) })
+	for _, rule := range paths {
+		for _, system := range seatbeltSystem {
+			if rule.write && within(system, rule.path) {
+				return "", fmt.Errorf("the writable path %s lies inside the system, in %s", rule.path, system)
+			}
+		}
+	}
+	// Of two rules for one path the read-only one is the later.
+	sort.SliceStable(paths, func(i, j int) bool {
+		if len(paths[i].path) != len(paths[j].path) {
+			return len(paths[i].path) < len(paths[j].path)
+		}
+		return paths[i].write && !paths[j].write
+	})
+
+	// A rule holds for the path a file has now. A directory above a
+	// read-only path must stay where it is, or the path below it gets
+	// another name, which no rule protects.
+	fixed := map[string]bool{}
+	for _, rule := range paths {
+		if rule.write {
+			continue
+		}
+		for dir := filepath.Dir(rule.path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			for _, other := range paths {
+				if other.write && within(other.path, dir) {
+					fixed[dir] = true
+				}
+			}
+		}
+	}
+	var held []string
+	for dir := range fixed {
+		held = append(held, dir)
+	}
+	sort.Strings(held)
 
 	above := map[string]bool{}
 	for _, rule := range paths {
@@ -178,7 +223,7 @@ func seatbeltProfile(r resolved) (string, error) {
 	}
 	sort.Strings(dirs)
 
-	fixed := []struct {
+	base := []struct {
 		rule  string
 		paths []string
 	}{
@@ -187,7 +232,7 @@ func seatbeltProfile(r resolved) (string, error) {
 		{"(allow file-read-metadata (literal %s))\n", seatbeltLinks},
 		{"(allow file-read-metadata (literal %s))\n", dirs},
 	}
-	for _, set := range fixed {
+	for _, set := range base {
 		for _, path := range set.paths {
 			quoted, err := seatbeltQuote(path)
 			if err != nil {
@@ -207,6 +252,13 @@ func seatbeltProfile(r resolved) (string, error) {
 		} else {
 			fmt.Fprintf(&b, "(deny file-write* (subpath %s))\n", quoted)
 		}
+	}
+	for _, dir := range held {
+		quoted, err := seatbeltQuote(dir)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "(deny file-write* (literal %s))\n", quoted)
 	}
 	return b.String(), nil
 }

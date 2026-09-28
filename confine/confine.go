@@ -6,9 +6,11 @@
 //
 // The sandbox denies what no rule allows. Beside the profile, a command can
 // read and execute the system itself, which every program needs to run: on
-// macOS /System, /bin, /sbin, /usr/bin, /usr/sbin, /usr/lib, /usr/libexec and
-// /usr/share. It cannot read /etc, /Library, /Applications or a home
-// directory, and it cannot reach a service of the system.
+// macOS /System, /bin, /sbin, /usr/bin, /usr/sbin, /usr/lib, /usr/libexec,
+// /usr/share, /private/var/db/dyld and /private/var/select. It cannot read
+// /etc, /Library, /Applications or a home directory, it cannot list the
+// processes of the host, and it cannot reach a service of the system. With a
+// proxy it can read the certificates in /private/etc/ssl.
 //
 // The package confines the commands a server starts. It does not confine the
 // server itself.
@@ -53,7 +55,9 @@ var (
 // name is out of reach, except the system itself as the package comment lists
 // it. The zero Profile allows the command's own temporary directory and
 // nothing else. Where one path lies inside another, the longer one decides:
-// a ReadOnly path inside a ReadWrite path cannot be written.
+// a ReadOnly path inside a ReadWrite path cannot be written, and the
+// directories that lead to it cannot be moved. A path in both lists is
+// read-only.
 type Profile struct {
 	// ReadOnly lists the files and directories the command may read.
 	ReadOnly []string

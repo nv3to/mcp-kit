@@ -591,6 +591,54 @@ func escapeWriteToAReadOnlyPathInsideAWritableOne(t *testing.T, f fixture) {
 	}
 }
 
+func TestEscapeMoveADirectoryAboveAReadOnlyPath(t *testing.T) {
+	eachNetwork(t, escapeMoveADirectoryAboveAReadOnlyPath)
+}
+
+// A rule holds for the path a file has now, so a read-only path whose
+// directory was moved would have a name that no rule protects.
+func escapeMoveADirectoryAboveAReadOnlyPath(t *testing.T, f fixture) {
+	above := filepath.Join(f.readWrite, "above")
+	kept := filepath.Join(above, "kept")
+	if err := os.MkdirAll(kept, 0o700); err != nil {
+		t.Fatalf("create %s: %v", kept, err)
+	}
+	file := filepath.Join(kept, "file.txt")
+	write(t, file, "kept")
+	f.profile.ReadOnly = append(f.profile.ReadOnly, kept)
+
+	const move = `/bin/mv "$0" "$1" && echo written > "$1/$2"`
+	for _, attempt := range []struct{ from, to, file string }{
+		{above, filepath.Join(f.readWrite, "moved"), "kept/file.txt"},
+		{f.readWrite, "$TMPDIR/moved", "above/kept/file.txt"},
+	} {
+		script := strings.Replace(move, `"$1"`, `"`+attempt.to+`"`, -1)
+		script = strings.Replace(script, `"$1/$2"`, `"`+attempt.to+"/"+attempt.file+`"`, -1)
+		r := try(t, f.profile, "/bin/sh", "-c", script, attempt.from)
+		if !exists(file) {
+			t.Fatalf("move of %s to %s: want it to fail, got %v and %q, and %s is gone", attempt.from, attempt.to, r.err, r.output, file)
+		}
+		if got := content(t, file); r.err == nil || got != "kept" {
+			t.Errorf("move of %s to %s: want it to fail, got %v and the content %q", attempt.from, attempt.to, r.err, got)
+		}
+	}
+	beside := filepath.Join(above, "written.txt")
+	r := try(t, f.profile, "/bin/sh", "-c", writeScript, beside)
+	if r.err != nil || !exists(beside) {
+		t.Errorf("write of %s: got %v and %q, want it written", beside, r.err, r.output)
+	}
+}
+
+func TestEscapeWriteToAPathThatIsReadOnlyAndWritable(t *testing.T) {
+	f := newFixture(t)
+	f.profile.ReadOnly = append(f.profile.ReadOnly, f.readWrite)
+	target := filepath.Join(f.readWrite, "written.txt")
+	r := try(t, f.profile, "/bin/sh", "-c", writeScript, target)
+	if r.err == nil || exists(target) {
+		t.Errorf("write of %s: want it to fail, got %v and %q", target, r.err, r.output)
+	}
+}
+
 func TestWritablePathInsideAReadOnlyOne(t *testing.T) {
 	f := newFixture(t)
 	out := filepath.Join(f.readOnly, "out")

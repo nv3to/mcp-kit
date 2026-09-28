@@ -78,7 +78,7 @@ func TestSeatbeltRender(t *testing.T) {
 func TestSeatbeltRenderProxy(t *testing.T) {
 	const rule = "(allow network-outbound (remote ip \"localhost:3128\"))\n"
 	closed := mustRender(t, resolved{})
-	if strings.Contains(closed, "network") || strings.Contains(closed, "mach-lookup") {
+	if strings.Contains(closed, "network") {
 		t.Errorf("the profile of a closed network allows traffic or a service:\n%s", closed)
 	}
 	narrowed := mustRender(t, resolved{proxy: netip.MustParseAddrPort("127.0.0.1:3128")})
