@@ -355,6 +355,7 @@ func bwrapArgs(program, forwarder string, layout []bwrapEntry, r resolved, argv 
 		"--unshare-net",
 		"--new-session",
 		"--die-with-parent",
+		"--cap-drop", "ALL",
 	}
 	last := ""
 	for _, mount := range mounts {

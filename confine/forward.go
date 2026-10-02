@@ -32,6 +32,10 @@ const socketMax = 103
 // relayDial bounds the connection of the relay to the proxy.
 const relayDial = 10 * time.Second
 
+// relayMax bounds the connections one relay carries at a time. Each takes
+// two descriptors of the server.
+var relayMax = 128
+
 // initialized is set by Init.
 var initialized atomic.Bool
 
@@ -77,6 +81,8 @@ type relay struct {
 	proxy  string
 	l      net.Listener
 	wg     sync.WaitGroup
+	// slots holds one entry for each connection the relay carries.
+	slots chan struct{}
 
 	mu     sync.Mutex
 	conns  map[net.Conn]struct{}
@@ -109,7 +115,7 @@ func startRelay(proxy netip.AddrPort) (*relay, error) {
 			os.RemoveAll(dir)
 			return nil, err
 		}
-		r := &relay{dir: dir, socket: socket, proxy: proxy.String(), l: l, conns: map[net.Conn]struct{}{}}
+		r := &relay{dir: dir, socket: socket, proxy: proxy.String(), l: l, conns: map[net.Conn]struct{}{}, slots: make(chan struct{}, relayMax)}
 		r.wg.Add(1)
 		go r.serve()
 		return r, nil
@@ -124,9 +130,14 @@ func (r *relay) serve() {
 		if err != nil {
 			return
 		}
+		// A connection beyond the bound waits here, unaccepted, until one
+		// that is carried ends: a command cannot use up the descriptors of
+		// the server.
+		r.slots <- struct{}{}
 		r.wg.Add(1)
 		go func() {
 			defer r.wg.Done()
+			defer func() { <-r.slots }()
 			r.carry(in)
 		}()
 	}

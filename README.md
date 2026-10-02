@@ -302,7 +302,8 @@ are held to a profile.
   lies anywhere else. No service of the system is in reach: `/usr/bin/open`,
   Apple events and `launchctl` fail. Name the directory of a tool that lives
   elsewhere, such as `/opt/homebrew`, in `ReadOnly`.
-- **On Linux the root is empty.** bubblewrap binds into it, read-only, what
+- **On Linux the root is empty,** a file system in memory that ends with the
+  sandbox. bubblewrap binds into it, read-only, what
   a program needs to run: `/usr/bin`, `/usr/sbin`, `/usr/lib`, `/usr/lib32`,
   `/usr/lib64`, `/usr/libx32`, `/usr/libexec` and `/usr/share`; `/bin`,
   `/sbin`, `/lib`, `/lib32`, `/lib64` and `/libx32`, as the directories or
@@ -425,6 +426,9 @@ cmd, err := confine.Command(ctx, profile, "go", "mod", "download")
   runs: without the call `Command` refuses a `Proxy` on Linux, and the
   message names `confine.Init`. The program of the server is readable and
   executable inside the sandbox.
+- **A relay carries at most 128 connections at a time,** so a command cannot
+  use up the descriptors of the server. A further connection waits until
+  one of them ends.
 - **Each command has a forwarder of its own.** The forwarder starts the
   command once it listens, and the two end together, also when the command
   is killed. `Wait` then closes the socket and removes its directory, so

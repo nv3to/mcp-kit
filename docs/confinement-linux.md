@@ -176,7 +176,9 @@ started again, once with the same namespaces and once with mounts only.
 Linux `Command` runs the command through them. The escape suite
 (`confine/escape_test.go` and `confine/escape_linux_test.go`) and the tests
 of the backend (`confine/bwrap_test.go`) run in the workflow's step "Test".
-No run of the workflow exists, so every entry here is `H:`. The rendering
+No run of the workflow exists, so every entry here is `H:` for the runner.
+The tests ran and passed in a container, which the section
+[Observed in a container](#observed-in-a-container) records. The rendering
 tests of `confine/bwrap_test.go` run on every system against a layout
 written into the test; the tests of `Command` through bubblewrap skip where
 the system is not Linux.
@@ -184,7 +186,7 @@ the system is not Linux.
 The arguments, in order: `--unshare-user`, `--unshare-pid`, `--unshare-ipc`,
 `--unshare-uts`, `--unshare-cgroup` and `--unshare-net`, never a `-try`
 variant, so that a namespace that cannot be unshared stops the start;
-`--new-session` and `--die-with-parent`; the binds of the system and of the
+`--new-session`, `--die-with-parent` and `--cap-drop ALL`; the binds of the system and of the
 profile, `--dev /dev` and `--proc /proc`, from the shortest path to the
 longest; `--chdir` to the working directory; then
 `-- /usr/bin/env -u PWD` and the command. With `Proxy` the binds include,
@@ -195,11 +197,13 @@ forwarder: `<program> mcpkit-confine-forward <address of the proxy>
 
 The network cases of `confine/nettest` run on Linux in the workflow's step
 "Test", and so do the cases of `confine/nettest/socket_linux_test.go` on the
-socket. No run exists, so the entries on the forwarder are `H:` as well.
+socket.
 
-- H: the root of the sandbox is an empty file system of its own, and a path
-  that is bound appears with the directories that lead to it and nothing
-  else of them. `/etc/passwd` is not there, so a read of it fails and
+- H: the root of the sandbox is an empty file system of its own, in memory,
+  and a path that is bound appears with the directories that lead to it and
+  nothing else of them. The command can write to the root itself; what it
+  writes there ends with the sandbox and reaches neither the host nor another
+  command. `/etc/passwd` is not there, so a read of it fails and
   accounts do not resolve.
 - H: `--symlink` makes `/bin`, `/sbin`, `/lib` and `/lib64` the links the
   host has where `/usr` is merged, as on `ubuntu-24.04`, and `/lib64` leads
@@ -228,6 +232,8 @@ socket. No run exists, so the entries on the forwarder are `H:` as well.
   that `confine.Init` handles, listens on the address of the proxy on the
   sandbox's own loopback and carries each connection to the socket, bound
   read-only (probes 2 and 3). The proxy variables are the same as on macOS.
+  A relay carries at most 128 connections at a time; a further one waits
+  until one of them ends.
 - H: the forwarder listens before it starts the command, and exits with the
   status of the command, or 128 and the signal as bubblewrap does, so the two
   end together. When the command is killed, bubblewrap dies and with it the
@@ -280,9 +286,13 @@ on the development machine.
 | bubblewrap | 0.8.0 |
 | Go | 1.27.0 |
 
-- E: 70 tests pass, none fails, 11 are skipped: the helper of the probes and
-  the ten network cases of `confine/nettest`, which that run skipped on
-  Linux.
+- E: 90 tests pass, subtests counted, none fails, and 1 is skipped, the helper
+  of the probes.
+- E: the network cases of `confine/nettest` pass, the download through the
+  proxy among them, and so do the three cases on the socket: the socket
+  leads to the proxy alone and cannot be removed or replaced, each command
+  has a forwarder of its own, and nothing is left listening when a command
+  ends or is killed.
 - E: every case of the escape suite passes through the bubblewrap backend,
   the cases on a read-only path inside a writable one, on a directory above
   it and on the table of processes among them.
@@ -300,4 +310,13 @@ on the development machine.
   - a process can tell that it is confined, by `uid_map`, the name of
     process 1, the namespaces and `NoNewPrivs`;
   - bubblewrap starts inside bubblewrap.
+- E, by hand, through `confine.Command`: the command has no capability
+  (`CapEff` is zero) and `NoNewPrivs` is set. In a user namespace it makes
+  for itself it cannot remount a read-only bind. Renaming a writable path or
+  a writable directory above a read-only path fails with `EBUSY`, a write
+  inside a read-only path with `EROFS`, a hard link from one bind into
+  another with `EXDEV`. With `Proxy`, `listen` fails with `EPERM` on any
+  port, also from the forwarder mode of the server's program started by the
+  command itself. With `None` an abstract unix socket of the host is out of
+  reach.
 - H: the same holds on the runner once user namespaces are allowed there.

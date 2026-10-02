@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -313,6 +314,74 @@ func TestRelay(t *testing.T) {
 	}
 	if _, err := os.Lstat(r.dir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the directory %s of the closed relay: got %v, want it removed", r.dir, err)
+	}
+}
+
+// holding answers each connection with one byte and holds it until the other
+// side ends. It counts the connections it holds.
+func holding(t *testing.T) (addr netip.AddrPort, held *atomic.Int32) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+	held = &atomic.Int32{}
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			held.Add(1)
+			go func() {
+				c.Write([]byte("x"))
+				io.Copy(io.Discard, c)
+				held.Add(-1)
+				c.Close()
+			}()
+		}
+	}()
+	return netip.MustParseAddrPort(l.Addr().String()), held
+}
+
+func TestRelayBoundsItsConnections(t *testing.T) {
+	bound := relayMax
+	relayMax = 2
+	t.Cleanup(func() { relayMax = bound })
+	proxy, held := holding(t)
+	r, err := startRelay(proxy)
+	if err != nil {
+		t.Fatalf("start the relay: %v", err)
+	}
+	defer r.close()
+
+	var conns []net.Conn
+	for i := 0; i < 5; i++ {
+		c, err := net.Dial("unix", r.socket)
+		if err != nil {
+			t.Fatalf("connect to the relay: %v", err)
+		}
+		defer c.Close()
+		conns = append(conns, c)
+	}
+	answered := func(c net.Conn, wait time.Duration) bool {
+		c.SetReadDeadline(time.Now().Add(wait))
+		_, err := io.ReadFull(c, make([]byte, 1))
+		return err == nil
+	}
+	for _, c := range conns[:2] {
+		if !answered(c, 10*time.Second) {
+			t.Fatalf("a connection within the bound got no answer")
+		}
+	}
+	if answered(conns[2], 500*time.Millisecond) || held.Load() != 2 {
+		t.Errorf("the proxy holds %d connections, want the bound of 2", held.Load())
+	}
+	// A connection that ends makes room for the next.
+	conns[0].Close()
+	if !answered(conns[2], 10*time.Second) {
+		t.Errorf("a connection that waited got no answer after another ended")
 	}
 }
 
